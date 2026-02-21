@@ -9,9 +9,11 @@ import {
   type Course,
   type Level,
   type Lesson,
-  type LessonContent
+  type LessonContent,
+  type SourceReference,
 } from '../db/schema';
 import { eq, asc } from 'drizzle-orm';
+import type { ContentPageMetadata, LessonMetadata } from './workshop.service';
 
 export interface CourseWithLevels extends Course {
   levels: LevelWithLessons[];
@@ -148,4 +150,72 @@ export async function getLessonContent(lessonId: string): Promise<LessonContent[
     .from(lessonContent)
     .where(eq(lessonContent.lessonId, lessonId))
     .orderBy(asc(lessonContent.orderIndex));
+}
+
+// ═══════════════════════════════════════════════════════
+//  Lesson Metadata (for regular course lessons)
+// ═══════════════════════════════════════════════════════
+
+export async function getLessonMetadata(lessonId: string): Promise<LessonMetadata | null> {
+  // Get the lesson
+  const [lesson] = await db
+    .select()
+    .from(lessons)
+    .where(eq(lessons.id, lessonId))
+    .limit(1);
+
+  if (!lesson) return null;
+
+  // Walk up to get the course (lesson → level → course)
+  const [level] = await db
+    .select()
+    .from(levels)
+    .where(eq(levels.id, lesson.levelId))
+    .limit(1);
+
+  let courseName = 'Bloom Team';
+  let aiInvolvement = 'full';
+  let courseCreatedAt = lesson.createdAt;
+
+  if (level) {
+    const [course] = await db
+      .select()
+      .from(courses)
+      .where(eq(courses.id, level.courseId))
+      .limit(1);
+
+    if (course) {
+      courseName = course.creatorName || 'Bloom Team';
+      aiInvolvement = course.aiInvolvement || 'full';
+      courseCreatedAt = course.createdAt;
+    }
+  }
+
+  // Get all content pages for this lesson
+  const contentPages = await db
+    .select()
+    .from(lessonContent)
+    .where(eq(lessonContent.lessonId, lessonId))
+    .orderBy(asc(lessonContent.orderIndex));
+
+  const pages: ContentPageMetadata[] = contentPages.map(page => ({
+    contentId: page.id,
+    authorName: courseName,
+    authorAvatarUrl: null,
+    sources: (page.sources as SourceReference[]) || [],
+    lastEdited: page.createdAt,
+    editors: [],
+  }));
+
+  return {
+    lesson: {
+      authorName: courseName,
+      authorAvatarUrl: null,
+      totalEdits: 0,
+      createdAt: courseCreatedAt,
+      updatedAt: courseCreatedAt,
+      aiInvolvement,
+    },
+    pages,
+  };
 }

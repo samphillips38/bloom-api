@@ -19,6 +19,7 @@ export const users = pgTable('users', {
 export const usersRelations = relations(users, ({ many, one }) => ({
   progress: many(userProgress),
   streak: one(streaks),
+  workshopLessons: many(workshopLessons),
 }));
 
 // ============ STREAKS ============
@@ -65,6 +66,8 @@ export const courses = pgTable('courses', {
   exerciseCount: integer('exercise_count').notNull().default(0),
   isRecommended: boolean('is_recommended').notNull().default(false),
   collaborators: jsonb('collaborators').$type<string[]>().default([]),
+  creatorName: varchar('creator_name', { length: 255 }).default('Bloom Team'),
+  aiInvolvement: varchar('ai_involvement', { length: 20 }).default('full'), // 'none' | 'collaboration' | 'full'
   orderIndex: integer('order_index').notNull().default(0),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -122,6 +125,7 @@ export const lessonContent = pgTable('lesson_content', {
   orderIndex: integer('order_index').notNull().default(0),
   contentType: varchar('content_type', { length: 50 }).notNull(), // text, image, interactive, question
   contentData: jsonb('content_data').notNull().$type<ContentData>(),
+  sources: jsonb('sources').$type<SourceReference[]>().default([]),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -132,12 +136,42 @@ export const lessonContentRelations = relations(lessonContent, ({ one }) => ({
   }),
 }));
 
-// Content data types
-export type ContentData = 
+// ============ RICH CONTENT DATA TYPES ============
+
+// Inline text segment — the atomic unit of rich text
+export interface TextSegment {
+  text: string
+  bold?: boolean
+  italic?: boolean
+  color?: 'accent' | 'secondary' | 'success' | 'warning' | 'blue' | 'purple'
+  underline?: boolean
+  definition?: string            // tappable definition popover
+  latex?: boolean                // render this segment as inline LaTeX
+}
+
+// Block types that make up a lesson page
+export type ContentBlock =
+  | { type: 'heading'; segments: TextSegment[]; level?: 1 | 2 | 3 }
+  | { type: 'paragraph'; segments: TextSegment[] }
+  | { type: 'image'; src: string; alt?: string; caption?: string; style?: 'full' | 'inline' | 'icon' }
+  | { type: 'math'; latex: string; caption?: string }             // block-level LaTeX
+  | { type: 'callout'; style: 'info' | 'tip' | 'warning' | 'example'; title?: string; segments: TextSegment[] }
+  | { type: 'bulletList'; items: TextSegment[][] }                 // each item is an array of segments
+  | { type: 'animation'; src: string; autoplay?: boolean; loop?: boolean; caption?: string }
+  | { type: 'interactive'; componentId: string; props?: Record<string, unknown> }
+  | { type: 'spacer'; size?: 'sm' | 'md' | 'lg' }
+  | { type: 'divider' }
+
+// Top-level content data for a lesson content entry
+export type ContentData =
+  // NEW: rich page with multiple blocks
+  | { type: 'page'; blocks: ContentBlock[] }
+  // Questions stay as a dedicated type
+  | { type: 'question'; question: string; questionSegments?: TextSegment[]; options: string[]; optionSegments?: TextSegment[][]; correctIndex: number; explanation?: string; explanationSegments?: TextSegment[] }
+  // LEGACY: keep old types for backward compatibility
   | { type: 'text'; text: string; formatting?: { bold?: boolean; superscript?: boolean } }
   | { type: 'image'; url: string; caption?: string }
-  | { type: 'interactive'; componentId: string; props?: Record<string, unknown> }
-  | { type: 'question'; question: string; options: string[]; correctIndex: number; explanation?: string };
+  | { type: 'interactive'; componentId: string; props?: Record<string, unknown> };
 
 // ============ USER PROGRESS ============
 export const userProgress = pgTable('user_progress', {
@@ -162,6 +196,125 @@ export const userProgressRelations = relations(userProgress, ({ one }) => ({
   }),
 }));
 
+// ============ WORKSHOP LESSONS ============
+export const workshopLessons = pgTable('workshop_lessons', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  authorId: uuid('author_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  title: varchar('title', { length: 255 }).notNull(),
+  description: text('description'),
+  iconUrl: text('icon_url'),
+  themeColor: varchar('theme_color', { length: 7 }).default('#FF6B35'),
+  visibility: varchar('visibility', { length: 20 }).notNull().default('private'), // 'private' | 'public'
+  status: varchar('status', { length: 20 }).notNull().default('draft'), // 'draft' | 'published'
+  editPolicy: varchar('edit_policy', { length: 20 }).notNull().default('approval'), // 'open' | 'approval'
+  aiInvolvement: varchar('ai_involvement', { length: 20 }).notNull().default('none'), // 'none' | 'collaboration' | 'full'
+  isPromoted: boolean('is_promoted').notNull().default(false),
+  publishedAt: timestamp('published_at'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+export const workshopLessonsRelations = relations(workshopLessons, ({ one, many }) => ({
+  author: one(users, {
+    fields: [workshopLessons.authorId],
+    references: [users.id],
+  }),
+  content: many(workshopLessonContent),
+  edits: many(workshopContentEdits),
+  suggestions: many(workshopEditSuggestions),
+}));
+
+// ============ WORKSHOP LESSON CONTENT ============
+export interface SourceReference {
+  title: string;
+  url?: string;
+  description?: string;
+}
+
+export const workshopLessonContent = pgTable('workshop_lesson_content', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workshopLessonId: uuid('workshop_lesson_id').notNull().references(() => workshopLessons.id, { onDelete: 'cascade' }),
+  orderIndex: integer('order_index').notNull().default(0),
+  contentType: varchar('content_type', { length: 50 }).notNull(),
+  contentData: jsonb('content_data').notNull().$type<ContentData>(),
+  authorId: uuid('author_id').notNull().references(() => users.id),
+  sources: jsonb('sources').$type<SourceReference[]>().default([]),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+export const workshopLessonContentRelations = relations(workshopLessonContent, ({ one, many }) => ({
+  workshopLesson: one(workshopLessons, {
+    fields: [workshopLessonContent.workshopLessonId],
+    references: [workshopLessons.id],
+  }),
+  author: one(users, {
+    fields: [workshopLessonContent.authorId],
+    references: [users.id],
+  }),
+  edits: many(workshopContentEdits),
+}));
+
+// ============ WORKSHOP CONTENT EDITS (History) ============
+export const workshopContentEdits = pgTable('workshop_content_edits', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workshopLessonId: uuid('workshop_lesson_id').notNull().references(() => workshopLessons.id, { onDelete: 'cascade' }),
+  contentId: uuid('content_id').references(() => workshopLessonContent.id, { onDelete: 'set null' }),
+  editorId: uuid('editor_id').notNull().references(() => users.id),
+  editType: varchar('edit_type', { length: 20 }).notNull(), // 'create' | 'update' | 'reorder' | 'delete'
+  previousData: jsonb('previous_data'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+export const workshopContentEditsRelations = relations(workshopContentEdits, ({ one }) => ({
+  workshopLesson: one(workshopLessons, {
+    fields: [workshopContentEdits.workshopLessonId],
+    references: [workshopLessons.id],
+  }),
+  content: one(workshopLessonContent, {
+    fields: [workshopContentEdits.contentId],
+    references: [workshopLessonContent.id],
+  }),
+  editor: one(users, {
+    fields: [workshopContentEdits.editorId],
+    references: [users.id],
+  }),
+}));
+
+// ============ WORKSHOP EDIT SUGGESTIONS ============
+export const workshopEditSuggestions = pgTable('workshop_edit_suggestions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workshopLessonId: uuid('workshop_lesson_id').notNull().references(() => workshopLessons.id, { onDelete: 'cascade' }),
+  contentId: uuid('content_id').references(() => workshopLessonContent.id, { onDelete: 'set null' }),
+  suggesterId: uuid('suggester_id').notNull().references(() => users.id),
+  suggestedData: jsonb('suggested_data').notNull(),
+  status: varchar('status', { length: 20 }).notNull().default('pending'), // 'pending' | 'approved' | 'rejected'
+  reviewerId: uuid('reviewer_id').references(() => users.id),
+  reviewedAt: timestamp('reviewed_at'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+export const workshopEditSuggestionsRelations = relations(workshopEditSuggestions, ({ one }) => ({
+  workshopLesson: one(workshopLessons, {
+    fields: [workshopEditSuggestions.workshopLessonId],
+    references: [workshopLessons.id],
+  }),
+  content: one(workshopLessonContent, {
+    fields: [workshopEditSuggestions.contentId],
+    references: [workshopLessonContent.id],
+  }),
+  suggester: one(users, {
+    fields: [workshopEditSuggestions.suggesterId],
+    references: [users.id],
+    relationName: 'suggester',
+  }),
+  reviewer: one(users, {
+    fields: [workshopEditSuggestions.reviewerId],
+    references: [users.id],
+    relationName: 'reviewer',
+  }),
+}));
+
 // ============ TYPE EXPORTS ============
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
@@ -173,3 +326,9 @@ export type LessonContent = typeof lessonContent.$inferSelect;
 export type UserProgress = typeof userProgress.$inferSelect;
 export type Streak = typeof streaks.$inferSelect;
 export type Category = typeof categories.$inferSelect;
+export type WorkshopLesson = typeof workshopLessons.$inferSelect;
+export type NewWorkshopLesson = typeof workshopLessons.$inferInsert;
+export type WorkshopLessonContent = typeof workshopLessonContent.$inferSelect;
+export type NewWorkshopLessonContent = typeof workshopLessonContent.$inferInsert;
+export type WorkshopContentEdit = typeof workshopContentEdits.$inferSelect;
+export type WorkshopEditSuggestion = typeof workshopEditSuggestions.$inferSelect;

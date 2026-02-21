@@ -9,6 +9,8 @@ import { errorHandler, notFoundHandler } from './middleware/error.middleware';
 import authRoutes from './routes/auth.routes';
 import coursesRoutes from './routes/courses.routes';
 import progressRoutes from './routes/progress.routes';
+import workshopRoutes from './routes/workshop.routes';
+import { authMiddleware } from './middleware/auth.middleware';
 
 const app = express();
 
@@ -32,6 +34,7 @@ app.get('/health', (_req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/courses', coursesRoutes);
 app.use('/api/progress', progressRoutes);
+app.use('/api/workshop', authMiddleware, workshopRoutes);
 
 // Error handling
 app.use(notFoundHandler);
