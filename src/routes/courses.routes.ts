@@ -13,6 +13,7 @@ router.get('/:id', coursesController.getCourseById);
 
 // Lessons
 router.get('/lessons/:id', coursesController.getLessonById);
+router.get('/lessons/:id/metadata', coursesController.getLessonMetadata);
 router.get('/levels/:levelId/lessons', coursesController.getLessonsByLevel);
 
 export default router;

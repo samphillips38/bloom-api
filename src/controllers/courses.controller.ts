@@ -124,3 +124,26 @@ export async function getLessonsByLevel(
     next(error);
   }
 }
+
+// Lesson metadata (for regular course lessons)
+export async function getLessonMetadata(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { id } = req.params;
+    const metadata = await courseService.getLessonMetadata(id);
+
+    if (!metadata) {
+      throw new AppError('Lesson not found', 404);
+    }
+
+    res.json({
+      success: true,
+      data: { metadata },
+    });
+  } catch (error) {
+    next(error);
+  }
+}

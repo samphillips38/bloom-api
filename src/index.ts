@@ -9,13 +9,19 @@ import { errorHandler, notFoundHandler } from './middleware/error.middleware';
 import authRoutes from './routes/auth.routes';
 import coursesRoutes from './routes/courses.routes';
 import progressRoutes from './routes/progress.routes';
+import workshopRoutes from './routes/workshop.routes';
+import { authMiddleware } from './middleware/auth.middleware';
 
 const app = express();
 
 // Security middleware
 app.use(helmet());
 app.use(cors({
-  origin: env.isDev ? '*' : process.env.FRONTEND_URL,
+  origin: env.isDev
+    ? '*'
+    : process.env.FRONTEND_URL
+      ? process.env.FRONTEND_URL.split(',').map(u => u.trim())
+      : '*',
   credentials: true,
 }));
 
@@ -32,6 +38,7 @@ app.get('/health', (_req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/courses', coursesRoutes);
 app.use('/api/progress', progressRoutes);
+app.use('/api/workshop', authMiddleware, workshopRoutes);
 
 // Error handling
 app.use(notFoundHandler);

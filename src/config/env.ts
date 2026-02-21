@@ -14,6 +14,9 @@ export const env = {
   PORT: parseInt(process.env.PORT || '3000', 10),
   NODE_ENV: process.env.NODE_ENV || 'development',
   
+  // AI
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
+
   // OAuth
   GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || '',
   GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET || '',
