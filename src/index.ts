@@ -17,7 +17,11 @@ const app = express();
 // Security middleware
 app.use(helmet());
 app.use(cors({
-  origin: env.isDev ? '*' : process.env.FRONTEND_URL,
+  origin: env.isDev
+    ? '*'
+    : process.env.FRONTEND_URL
+      ? process.env.FRONTEND_URL.split(',').map(u => u.trim())
+      : '*',
   credentials: true,
 }));
 
