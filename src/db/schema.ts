@@ -208,6 +208,10 @@ export const workshopLessons = pgTable('workshop_lessons', {
   status: varchar('status', { length: 20 }).notNull().default('draft'), // 'draft' | 'published'
   editPolicy: varchar('edit_policy', { length: 20 }).notNull().default('approval'), // 'open' | 'approval'
   aiInvolvement: varchar('ai_involvement', { length: 20 }).notNull().default('none'), // 'none' | 'collaboration' | 'full'
+  tags: jsonb('tags').$type<string[]>().default([]),
+  ratingSum: integer('rating_sum').notNull().default(0),
+  ratingCount: integer('rating_count').notNull().default(0),
+  viewCount: integer('view_count').notNull().default(0),
   isPromoted: boolean('is_promoted').notNull().default(false),
   publishedAt: timestamp('published_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -332,3 +336,25 @@ export type WorkshopLessonContent = typeof workshopLessonContent.$inferSelect;
 export type NewWorkshopLessonContent = typeof workshopLessonContent.$inferInsert;
 export type WorkshopContentEdit = typeof workshopContentEdits.$inferSelect;
 export type WorkshopEditSuggestion = typeof workshopEditSuggestions.$inferSelect;
+
+// ============ WORKSHOP LESSON RATINGS ============
+export const workshopLessonRatings = pgTable('workshop_lesson_ratings', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workshopLessonId: uuid('workshop_lesson_id').notNull().references(() => workshopLessons.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  rating: integer('rating').notNull(), // 1-5
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+export const workshopLessonRatingsRelations = relations(workshopLessonRatings, ({ one }) => ({
+  workshopLesson: one(workshopLessons, {
+    fields: [workshopLessonRatings.workshopLessonId],
+    references: [workshopLessons.id],
+  }),
+  user: one(users, {
+    fields: [workshopLessonRatings.userId],
+    references: [users.id],
+  }),
+}));
+
+export type WorkshopLessonRating = typeof workshopLessonRatings.$inferSelect;

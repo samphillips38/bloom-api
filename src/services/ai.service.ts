@@ -114,8 +114,12 @@ const LESSON_RESPONSE_SCHEMA = {
         type: 'array' as const,
         items: LESSON_PAGE_SCHEMA,
       },
+      tags: {
+        type: 'array' as const,
+        items: { type: 'string' as const },
+      },
     },
-    required: ['pages'],
+    required: ['pages', 'tags'],
     additionalProperties: false,
   },
 };
@@ -168,7 +172,13 @@ Guidelines:
 - End with a summary/review page
 - Colors available: "accent" (orange), "secondary" (gray), "success" (green), "warning" (amber), "blue", "purple"
 - Callout styles: "info", "tip", "warning", "example"
-- For unused/optional fields, always provide null (never omit a field)`;
+- For unused/optional fields, always provide null (never omit a field)
+
+TAGS:
+- Also include a "tags" array of 2-5 relevant topic tags for the lesson
+- Tags should be short, lowercase, single-topic labels (e.g. "logic", "physics", "music theory", "calculus", "machine learning")
+- Use commonly recognized subject/topic names
+- Tags help users discover lessons by topic`;
 
 // ═══════════════════════════════════════════════════════
 //  Sanitize helpers — strip nulls from AI output
@@ -208,7 +218,7 @@ function cleanBlock(block: any): ContentBlock {
 export async function generateLessonDraft(
   topic: string,
   pageCount: number = 8
-): Promise<ContentData[]> {
+): Promise<{ pages: ContentData[]; tags: string[] }> {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY is not configured');
   }
@@ -251,8 +261,13 @@ Return the JSON object with a "pages" array.`;
     throw new Error('AI returned empty lesson');
   }
 
+  // Extract tags from AI response
+  const tags: string[] = Array.isArray(parsed.tags)
+    ? parsed.tags.map((t: string) => t.toLowerCase().trim()).filter(Boolean)
+    : [];
+
   // Sanitize: strip null placeholders and map to clean ContentData
-  return pages.map((page: any): ContentData => {
+  const contentPages = pages.map((page: any): ContentData => {
     if (page.type === 'question') {
       return {
         type: 'question' as const,
@@ -271,4 +286,6 @@ Return the JSON object with a "pages" array.`;
       blocks: Array.isArray(page.blocks) ? page.blocks.map(cleanBlock) : [],
     };
   });
+
+  return { pages: contentPages, tags };
 }

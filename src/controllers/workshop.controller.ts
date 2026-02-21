@@ -18,7 +18,7 @@ export async function getMyLessons(req: Request, res: Response, next: NextFuncti
 
 export async function createLesson(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { title, description, iconUrl, themeColor, visibility, editPolicy, aiInvolvement } = req.body;
+    const { title, description, iconUrl, themeColor, visibility, editPolicy, aiInvolvement, tags } = req.body;
 
     if (!title || typeof title !== 'string' || title.trim().length === 0) {
       throw new AppError('Title is required', 400);
@@ -33,6 +33,7 @@ export async function createLesson(req: Request, res: Response, next: NextFuncti
       visibility,
       editPolicy,
       aiInvolvement,
+      tags: Array.isArray(tags) ? tags.map((t: string) => t.toLowerCase().trim()).filter(Boolean) : [],
     });
 
     res.status(201).json({ success: true, data: { lesson } });
@@ -64,9 +65,9 @@ export async function getLesson(req: Request, res: Response, next: NextFunction)
 export async function updateLesson(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
-    const { title, description, iconUrl, themeColor, visibility, editPolicy, aiInvolvement } = req.body;
+    const { title, description, iconUrl, themeColor, visibility, editPolicy, aiInvolvement, tags } = req.body;
 
-    const lesson = await workshopService.updateWorkshopLesson(id, req.user!.id, {
+    const updateData: Record<string, unknown> = {
       title,
       description,
       iconUrl,
@@ -74,7 +75,12 @@ export async function updateLesson(req: Request, res: Response, next: NextFuncti
       visibility,
       editPolicy,
       aiInvolvement,
-    });
+    };
+    if (Array.isArray(tags)) {
+      updateData.tags = tags.map((t: string) => t.toLowerCase().trim()).filter(Boolean);
+    }
+
+    const lesson = await workshopService.updateWorkshopLesson(id, req.user!.id, updateData);
 
     if (!lesson) {
       throw new AppError('Lesson not found or not authorized', 404);
@@ -111,6 +117,32 @@ export async function publishLesson(req: Request, res: Response, next: NextFunct
     }
 
     res.json({ success: true, data: { lesson } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  Play (serves workshop content as LessonWithContent)
+// ═══════════════════════════════════════════════════════
+
+export async function playLesson(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const lesson = await workshopService.getWorkshopLessonForPlay(id);
+
+    if (!lesson) {
+      throw new AppError('Workshop lesson not found', 404);
+    }
+
+    // If private, only the author can play
+    if (lesson.visibility === 'private' && lesson.authorId !== req.user!.id) {
+      throw new AppError('Not authorized to view this lesson', 403);
+    }
+
+    // Strip internal fields before sending
+    const { visibility, status, ...playData } = lesson;
+    res.json({ success: true, data: { lesson: playData } });
   } catch (error) {
     next(error);
   }
@@ -303,8 +335,8 @@ export async function generateAIDraft(req: Request, res: Response, next: NextFun
       throw new AppError('topic is required', 400);
     }
 
-    const pages = await aiService.generateLessonDraft(topic.trim(), pageCount || 8);
-    res.json({ success: true, data: { pages } });
+    const result = await aiService.generateLessonDraft(topic.trim(), pageCount || 8);
+    res.json({ success: true, data: { pages: result.pages, tags: result.tags } });
   } catch (error) {
     next(error);
   }
@@ -316,13 +348,55 @@ export async function generateAIDraft(req: Request, res: Response, next: NextFun
 
 export async function browse(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { search, limit, offset } = req.query;
+    const { search, tag, limit, offset, sort } = req.query;
     const result = await workshopService.browseWorkshopLessons({
       search: search as string | undefined,
+      tag: tag as string | undefined,
       limit: limit ? parseInt(limit as string) : undefined,
       offset: offset ? parseInt(offset as string) : undefined,
+      sort: (sort as 'recent' | 'rating' | 'popular') || undefined,
     });
     res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function getPopularTags(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { limit } = req.query;
+    const tags = await workshopService.getPopularTags(limit ? parseInt(limit as string) : 20);
+    res.json({ success: true, data: { tags } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function rateLesson(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const { rating } = req.body;
+
+    if (typeof rating !== 'number' || rating < 1 || rating > 5) {
+      throw new AppError('Rating must be an integer between 1 and 5', 400);
+    }
+
+    const result = await workshopService.rateWorkshopLesson(id, req.user!.id, Math.round(rating));
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function getLessonsByTag(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { tag } = req.params;
+    const { limit } = req.query;
+    const lessons = await workshopService.getLessonsByTag(
+      decodeURIComponent(tag),
+      limit ? parseInt(limit as string) : 10
+    );
+    res.json({ success: true, data: { lessons } });
   } catch (error) {
     next(error);
   }

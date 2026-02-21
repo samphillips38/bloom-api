@@ -9,12 +9,18 @@ router.get('/my-lessons', workshopController.getMyLessons);
 // Browse public lessons
 router.get('/browse', workshopController.browse);
 
+// Tags
+router.get('/tags/popular', workshopController.getPopularTags);
+router.get('/tags/:tag/lessons', workshopController.getLessonsByTag);
+
 // CRUD for workshop lessons
 router.post('/lessons', workshopController.createLesson);
 router.get('/lessons/:id', workshopController.getLesson);
 router.put('/lessons/:id', workshopController.updateLesson);
 router.delete('/lessons/:id', workshopController.deleteLesson);
 router.post('/lessons/:id/publish', workshopController.publishLesson);
+router.get('/lessons/:id/play', workshopController.playLesson);
+router.post('/lessons/:id/rate', workshopController.rateLesson);
 
 // Content pages
 router.post('/lessons/:id/content', workshopController.addContent);

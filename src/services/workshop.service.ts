@@ -4,6 +4,7 @@ import {
   workshopLessonContent,
   workshopContentEdits,
   workshopEditSuggestions,
+  workshopLessonRatings,
   users,
   type WorkshopLesson,
   type WorkshopLessonContent,
@@ -12,7 +13,7 @@ import {
   type ContentData,
   type SourceReference,
 } from '../db/schema';
-import { eq, and, asc, desc, or, sql } from 'drizzle-orm';
+import { eq, and, asc, desc, or, sql, ilike } from 'drizzle-orm';
 
 // ═══════════════════════════════════════════════════════
 //  Workshop Lesson interfaces
@@ -27,6 +28,7 @@ export interface WorkshopLessonWithContent extends WorkshopLesson {
 export interface WorkshopLessonSummary extends WorkshopLesson {
   authorName: string;
   pageCount: number;
+  averageRating: number;
 }
 
 export interface ContentPageMetadata {
@@ -63,6 +65,7 @@ export async function createWorkshopLesson(data: {
   visibility?: string;
   editPolicy?: string;
   aiInvolvement?: string;
+  tags?: string[];
 }): Promise<WorkshopLesson> {
   const [lesson] = await db
     .insert(workshopLessons)
@@ -75,6 +78,7 @@ export async function createWorkshopLesson(data: {
       visibility: data.visibility || 'private',
       editPolicy: data.editPolicy || 'approval',
       aiInvolvement: data.aiInvolvement || 'none',
+      tags: data.tags || [],
     })
     .returning();
   return lesson;
@@ -109,6 +113,60 @@ export async function getWorkshopLessonById(lessonId: string): Promise<WorkshopL
   };
 }
 
+/**
+ * Returns workshop lesson content in the same shape as a regular LessonWithContent,
+ * so the lesson viewer can play it identically to an official course lesson.
+ */
+export async function getWorkshopLessonForPlay(lessonId: string) {
+  const [lesson] = await db
+    .select()
+    .from(workshopLessons)
+    .where(eq(workshopLessons.id, lessonId))
+    .limit(1);
+
+  if (!lesson) return null;
+
+  const [author] = await db
+    .select({ name: users.name, avatarUrl: users.avatarUrl })
+    .from(users)
+    .where(eq(users.id, lesson.authorId))
+    .limit(1);
+
+  const pages = await db
+    .select()
+    .from(workshopLessonContent)
+    .where(eq(workshopLessonContent.workshopLessonId, lessonId))
+    .orderBy(asc(workshopLessonContent.orderIndex));
+
+  // Transform into LessonWithContent format
+  return {
+    id: lesson.id,
+    levelId: lesson.id, // use lesson id as a placeholder
+    title: lesson.title,
+    iconUrl: lesson.iconUrl,
+    type: 'lesson' as const,
+    orderIndex: 0,
+    content: pages.map((page, idx) => ({
+      id: page.id,
+      lessonId: lesson.id,
+      orderIndex: idx,
+      contentType: page.contentType,
+      contentData: page.contentData,
+    })),
+    // Extra fields for the course detail view
+    authorId: lesson.authorId,
+    authorName: author?.name || 'Unknown',
+    authorAvatarUrl: author?.avatarUrl || null,
+    description: lesson.description,
+    themeColor: lesson.themeColor,
+    aiInvolvement: lesson.aiInvolvement,
+    tags: lesson.tags,
+    creatorName: author?.name || 'Unknown',
+    visibility: lesson.visibility,
+    status: lesson.status,
+  };
+}
+
 export async function getMyWorkshopLessons(userId: string): Promise<WorkshopLessonSummary[]> {
   const lessons = await db
     .select()
@@ -133,6 +191,7 @@ export async function getMyWorkshopLessons(userId: string): Promise<WorkshopLess
       ...lesson,
       authorName: author?.name || 'Unknown',
       pageCount: Number(countResult?.count || 0),
+      averageRating: lesson.ratingCount > 0 ? lesson.ratingSum / lesson.ratingCount : 0,
     });
   }
 
@@ -150,6 +209,7 @@ export async function updateWorkshopLesson(
     visibility: string;
     editPolicy: string;
     aiInvolvement: string;
+    tags: string[];
   }>
 ): Promise<WorkshopLesson | null> {
   const [lesson] = await db
@@ -628,36 +688,54 @@ export async function reviewEditSuggestion(
 
 export async function browseWorkshopLessons(opts?: {
   search?: string;
+  tag?: string;
   limit?: number;
   offset?: number;
+  sort?: 'recent' | 'rating' | 'popular';
 }): Promise<{ lessons: WorkshopLessonSummary[]; total: number }> {
   const limit = opts?.limit || 20;
   const offset = opts?.offset || 0;
+  const sort = opts?.sort || 'rating';
 
-  let query = db
+  const conditions = [
+    eq(workshopLessons.status, 'published'),
+    eq(workshopLessons.visibility, 'public'),
+  ];
+
+  // Filter by tag using jsonb containment
+  if (opts?.tag) {
+    conditions.push(sql`${workshopLessons.tags}::jsonb @> ${JSON.stringify([opts.tag])}::jsonb`);
+  }
+
+  // Filter by search term
+  if (opts?.search) {
+    conditions.push(
+      or(
+        ilike(workshopLessons.title, `%${opts.search}%`),
+        ilike(workshopLessons.description, `%${opts.search}%`)
+      )!
+    );
+  }
+
+  // Determine sort order
+  const orderBy = sort === 'recent'
+    ? desc(workshopLessons.publishedAt)
+    : sort === 'popular'
+      ? desc(workshopLessons.viewCount)
+      : sql`CASE WHEN ${workshopLessons.ratingCount} = 0 THEN 0 ELSE ${workshopLessons.ratingSum}::float / ${workshopLessons.ratingCount} END DESC`;
+
+  const lessons = await db
     .select()
     .from(workshopLessons)
-    .where(
-      and(
-        eq(workshopLessons.status, 'published'),
-        eq(workshopLessons.visibility, 'public')
-      )
-    )
-    .orderBy(desc(workshopLessons.publishedAt))
+    .where(and(...conditions))
+    .orderBy(orderBy, desc(workshopLessons.viewCount))
     .limit(limit)
     .offset(offset);
-
-  const lessons = await query;
 
   const [totalResult] = await db
     .select({ count: sql<number>`count(*)` })
     .from(workshopLessons)
-    .where(
-      and(
-        eq(workshopLessons.status, 'published'),
-        eq(workshopLessons.visibility, 'public')
-      )
-    );
+    .where(and(...conditions));
 
   const result: WorkshopLessonSummary[] = [];
   for (const lesson of lessons) {
@@ -676,10 +754,149 @@ export async function browseWorkshopLessons(opts?: {
       ...lesson,
       authorName: author?.name || 'Unknown',
       pageCount: Number(countResult?.count || 0),
+      averageRating: lesson.ratingCount > 0 ? lesson.ratingSum / lesson.ratingCount : 0,
     });
   }
 
   return { lessons: result, total: Number(totalResult?.count || 0) };
+}
+
+// ═══════════════════════════════════════════════════════
+//  Popular Tags
+// ═══════════════════════════════════════════════════════
+
+export async function getPopularTags(limit: number = 20): Promise<{ tag: string; count: number }[]> {
+  const result = await db.execute(sql`
+    SELECT tag, COUNT(*) as count
+    FROM workshop_lessons,
+    jsonb_array_elements_text(tags) AS tag
+    WHERE status = 'published' AND visibility = 'public'
+    GROUP BY tag
+    ORDER BY count DESC
+    LIMIT ${limit}
+  `);
+
+  return (result.rows as any[]).map(row => ({
+    tag: row.tag as string,
+    count: Number(row.count),
+  }));
+}
+
+// ═══════════════════════════════════════════════════════
+//  Ratings
+// ═══════════════════════════════════════════════════════
+
+export async function rateWorkshopLesson(
+  workshopLessonId: string,
+  userId: string,
+  rating: number
+): Promise<{ averageRating: number; ratingCount: number }> {
+  if (rating < 1 || rating > 5) throw new Error('Rating must be between 1 and 5');
+
+  // Check for existing rating
+  const [existing] = await db
+    .select()
+    .from(workshopLessonRatings)
+    .where(
+      and(
+        eq(workshopLessonRatings.workshopLessonId, workshopLessonId),
+        eq(workshopLessonRatings.userId, userId)
+      )
+    )
+    .limit(1);
+
+  if (existing) {
+    // Update existing rating
+    const diff = rating - existing.rating;
+    await db
+      .update(workshopLessonRatings)
+      .set({ rating })
+      .where(eq(workshopLessonRatings.id, existing.id));
+
+    await db
+      .update(workshopLessons)
+      .set({
+        ratingSum: sql`${workshopLessons.ratingSum} + ${diff}`,
+      })
+      .where(eq(workshopLessons.id, workshopLessonId));
+  } else {
+    // Insert new rating
+    await db
+      .insert(workshopLessonRatings)
+      .values({ workshopLessonId, userId, rating });
+
+    await db
+      .update(workshopLessons)
+      .set({
+        ratingSum: sql`${workshopLessons.ratingSum} + ${rating}`,
+        ratingCount: sql`${workshopLessons.ratingCount} + 1`,
+      })
+      .where(eq(workshopLessons.id, workshopLessonId));
+  }
+
+  // Return updated values
+  const [lesson] = await db
+    .select({ ratingSum: workshopLessons.ratingSum, ratingCount: workshopLessons.ratingCount })
+    .from(workshopLessons)
+    .where(eq(workshopLessons.id, workshopLessonId))
+    .limit(1);
+
+  return {
+    averageRating: lesson.ratingCount > 0 ? lesson.ratingSum / lesson.ratingCount : 0,
+    ratingCount: lesson.ratingCount,
+  };
+}
+
+export async function incrementViewCount(workshopLessonId: string): Promise<void> {
+  await db
+    .update(workshopLessons)
+    .set({ viewCount: sql`${workshopLessons.viewCount} + 1` })
+    .where(eq(workshopLessons.id, workshopLessonId));
+}
+
+// ═══════════════════════════════════════════════════════
+//  Get lessons grouped by tags (for Courses page)
+// ═══════════════════════════════════════════════════════
+
+export async function getLessonsByTag(tag: string, limit: number = 10): Promise<WorkshopLessonSummary[]> {
+  const lessons = await db
+    .select()
+    .from(workshopLessons)
+    .where(
+      and(
+        eq(workshopLessons.status, 'published'),
+        eq(workshopLessons.visibility, 'public'),
+        sql`${workshopLessons.tags}::jsonb @> ${JSON.stringify([tag])}::jsonb`
+      )
+    )
+    .orderBy(
+      sql`CASE WHEN ${workshopLessons.ratingCount} = 0 THEN 0 ELSE ${workshopLessons.ratingSum}::float / ${workshopLessons.ratingCount} END DESC`,
+      desc(workshopLessons.viewCount)
+    )
+    .limit(limit);
+
+  const result: WorkshopLessonSummary[] = [];
+  for (const lesson of lessons) {
+    const [author] = await db
+      .select({ name: users.name })
+      .from(users)
+      .where(eq(users.id, lesson.authorId))
+      .limit(1);
+
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(workshopLessonContent)
+      .where(eq(workshopLessonContent.workshopLessonId, lesson.id));
+
+    result.push({
+      ...lesson,
+      authorName: author?.name || 'Unknown',
+      pageCount: Number(countResult?.count || 0),
+      averageRating: lesson.ratingCount > 0 ? lesson.ratingSum / lesson.ratingCount : 0,
+    });
+  }
+
+  return result;
 }
 
 // ═══════════════════════════════════════════════════════
