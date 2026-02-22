@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import { env } from './config/env';
 import { testConnection, db } from './config/database';
 import { sql } from 'drizzle-orm';
@@ -17,18 +18,31 @@ const app = express();
 
 // Security middleware
 app.use(helmet());
+
+// CORS — allow credentials for refresh token cookies
+const allowedOrigins = env.isDev
+  ? ['http://localhost:5173', 'http://localhost:3000']
+  : process.env.FRONTEND_URL
+    ? process.env.FRONTEND_URL.split(',').map(u => u.trim())
+    : [];
+
 app.use(cors({
   origin: env.isDev
-    ? '*'
-    : process.env.FRONTEND_URL
-      ? process.env.FRONTEND_URL.split(',').map(u => u.trim())
-      : '*',
+    ? true // allow any origin in dev
+    : (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error('Not allowed by CORS'));
+        }
+      },
   credentials: true,
 }));
 
-// Body parsing
+// Body parsing & cookies
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
 // Health check
 app.get('/health', (_req, res) => {
@@ -142,6 +156,24 @@ async function runAutoMigrations() {
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
         UNIQUE(lesson_id, user_id)
       )
+    `);
+
+    // ── Refresh tokens table ──
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS refresh_tokens (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token_hash VARCHAR(255) NOT NULL UNIQUE,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        revoked_at TIMESTAMP
+      )
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id)
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash)
     `);
 
     console.log('✅ Auto-migrations complete');
