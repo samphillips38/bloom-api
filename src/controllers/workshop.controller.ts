@@ -4,12 +4,12 @@ import * as aiService from '../services/ai.service';
 import { AppError } from '../middleware/error.middleware';
 
 // ═══════════════════════════════════════════════════════
-//  Workshop Lessons CRUD
+//  Lessons CRUD (user-created)
 // ═══════════════════════════════════════════════════════
 
 export async function getMyLessons(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const lessons = await workshopService.getMyWorkshopLessons(req.user!.id);
+    const lessons = await workshopService.getMyLessons(req.user!.id);
     res.json({ success: true, data: { lessons } });
   } catch (error) {
     next(error);
@@ -24,7 +24,7 @@ export async function createLesson(req: Request, res: Response, next: NextFuncti
       throw new AppError('Title is required', 400);
     }
 
-    const lesson = await workshopService.createWorkshopLesson({
+    const lesson = await workshopService.createLesson({
       authorId: req.user!.id,
       title: title.trim(),
       description,
@@ -45,10 +45,10 @@ export async function createLesson(req: Request, res: Response, next: NextFuncti
 export async function getLesson(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
-    const lesson = await workshopService.getWorkshopLessonById(id);
+    const lesson = await workshopService.getLessonById(id);
 
     if (!lesson) {
-      throw new AppError('Workshop lesson not found', 404);
+      throw new AppError('Lesson not found', 404);
     }
 
     // If private, only the author can view
@@ -80,7 +80,7 @@ export async function updateLesson(req: Request, res: Response, next: NextFuncti
       updateData.tags = tags.map((t: string) => t.toLowerCase().trim()).filter(Boolean);
     }
 
-    const lesson = await workshopService.updateWorkshopLesson(id, req.user!.id, updateData);
+    const lesson = await workshopService.updateLesson(id, req.user!.id, updateData);
 
     if (!lesson) {
       throw new AppError('Lesson not found or not authorized', 404);
@@ -95,7 +95,7 @@ export async function updateLesson(req: Request, res: Response, next: NextFuncti
 export async function deleteLesson(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
-    const deleted = await workshopService.deleteWorkshopLesson(id, req.user!.id);
+    const deleted = await workshopService.deleteLesson(id, req.user!.id);
 
     if (!deleted) {
       throw new AppError('Lesson not found or not authorized', 404);
@@ -110,7 +110,7 @@ export async function deleteLesson(req: Request, res: Response, next: NextFuncti
 export async function publishLesson(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
-    const lesson = await workshopService.publishWorkshopLesson(id, req.user!.id);
+    const lesson = await workshopService.publishLesson(id, req.user!.id);
 
     if (!lesson) {
       throw new AppError('Cannot publish: lesson not found, not authorized, or no content', 400);
@@ -123,16 +123,16 @@ export async function publishLesson(req: Request, res: Response, next: NextFunct
 }
 
 // ═══════════════════════════════════════════════════════
-//  Play (serves workshop content as LessonWithContent)
+//  Play (serves lesson content for the viewer)
 // ═══════════════════════════════════════════════════════
 
 export async function playLesson(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
-    const lesson = await workshopService.getWorkshopLessonForPlay(id);
+    const lesson = await workshopService.getLessonForPlay(id);
 
     if (!lesson) {
-      throw new AppError('Workshop lesson not found', 404);
+      throw new AppError('Lesson not found', 404);
     }
 
     // If private, only the author can play
@@ -166,8 +166,9 @@ export async function addContent(req: Request, res: Response, next: NextFunction
       throw new AppError('Not authorized to edit this lesson', 403);
     }
 
-    const content = await workshopService.addWorkshopContent({
-      workshopLessonId: id,
+    const content = await workshopService.addLessonContent({
+      lessonId: id,
+      moduleId: req.body.moduleId,
       contentType,
       contentData,
       authorId: req.user!.id,
@@ -185,7 +186,7 @@ export async function updateContent(req: Request, res: Response, next: NextFunct
     const { cid } = req.params;
     const { contentType, contentData, sources } = req.body;
 
-    const content = await workshopService.updateWorkshopContent(cid, req.user!.id, {
+    const content = await workshopService.updateLessonContent(cid, req.user!.id, {
       contentType,
       contentData,
       sources,
@@ -210,7 +211,7 @@ export async function reorderContent(req: Request, res: Response, next: NextFunc
       throw new AppError('contentIds array is required', 400);
     }
 
-    const success = await workshopService.reorderWorkshopContent(id, req.user!.id, contentIds);
+    const success = await workshopService.reorderLessonContent(id, req.user!.id, contentIds);
     if (!success) {
       throw new AppError('Not authorized or lesson not found', 403);
     }
@@ -224,7 +225,7 @@ export async function reorderContent(req: Request, res: Response, next: NextFunc
 export async function deleteContent(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { cid } = req.params;
-    const deleted = await workshopService.deleteWorkshopContent(cid, req.user!.id);
+    const deleted = await workshopService.deleteLessonContent(cid, req.user!.id);
 
     if (!deleted) {
       throw new AppError('Content not found or not authorized', 404);
@@ -279,7 +280,7 @@ export async function submitSuggestion(req: Request, res: Response, next: NextFu
     }
 
     const suggestion = await workshopService.submitEditSuggestion({
-      workshopLessonId: id,
+      lessonId: id,
       contentId,
       suggesterId: req.user!.id,
       suggestedData,
@@ -335,8 +336,45 @@ export async function generateAIDraft(req: Request, res: Response, next: NextFun
       throw new AppError('topic is required', 400);
     }
 
-    const result = await aiService.generateLessonDraft(topic.trim(), pageCount || 8);
-    res.json({ success: true, data: { pages: result.pages, tags: result.tags } });
+    // Use the new two-phase generation
+    const result = await aiService.generateFullLesson(topic.trim(), pageCount || 12);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function generateAIPlan(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { topic, pageCount } = req.body;
+
+    if (!topic || typeof topic !== 'string' || topic.trim().length === 0) {
+      throw new AppError('topic is required', 400);
+    }
+
+    const plan = await aiService.generateLessonPlan(topic.trim(), pageCount || 12);
+    res.json({ success: true, data: { plan } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function generateAIModuleContent(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { lessonTitle, lessonDescription, modulePlan, moduleIndex, totalModules } = req.body;
+
+    if (!lessonTitle || !modulePlan) {
+      throw new AppError('lessonTitle and modulePlan are required', 400);
+    }
+
+    const pages = await aiService.generateModuleContent(
+      lessonTitle,
+      lessonDescription || '',
+      modulePlan,
+      moduleIndex || 0,
+      totalModules || 1
+    );
+    res.json({ success: true, data: { pages } });
   } catch (error) {
     next(error);
   }
@@ -349,7 +387,7 @@ export async function generateAIDraft(req: Request, res: Response, next: NextFun
 export async function browse(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { search, tag, limit, offset, sort } = req.query;
-    const result = await workshopService.browseWorkshopLessons({
+    const result = await workshopService.browseLessons({
       search: search as string | undefined,
       tag: tag as string | undefined,
       limit: limit ? parseInt(limit as string) : undefined,
@@ -381,7 +419,7 @@ export async function rateLesson(req: Request, res: Response, next: NextFunction
       throw new AppError('Rating must be an integer between 1 and 5', 400);
     }
 
-    const result = await workshopService.rateWorkshopLesson(id, req.user!.id, Math.round(rating));
+    const result = await workshopService.rateLesson(id, req.user!.id, Math.round(rating));
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
@@ -397,6 +435,98 @@ export async function getLessonsByTag(req: Request, res: Response, next: NextFun
       limit ? parseInt(limit as string) : 10
     );
     res.json({ success: true, data: { lessons } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  Module CRUD
+// ═══════════════════════════════════════════════════════
+
+export async function createModule(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const { title, description } = req.body;
+
+    if (!title || typeof title !== 'string' || title.trim().length === 0) {
+      throw new AppError('Module title is required', 400);
+    }
+
+    const module = await workshopService.createLessonModule({
+      lessonId: id,
+      title: title.trim(),
+      description,
+      userId: req.user!.id,
+    });
+
+    if (!module) {
+      throw new AppError('Not authorized or lesson not found', 403);
+    }
+
+    res.status(201).json({ success: true, data: { module } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function updateModule(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { mid } = req.params;
+    const { title, description } = req.body;
+
+    const module = await workshopService.updateLessonModule(mid, req.user!.id, { title, description });
+
+    if (!module) {
+      throw new AppError('Module not found or not authorized', 404);
+    }
+
+    res.json({ success: true, data: { module } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function deleteModule(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { mid } = req.params;
+    const deleted = await workshopService.deleteLessonModule(mid, req.user!.id);
+
+    if (!deleted) {
+      throw new AppError('Module not found or not authorized', 404);
+    }
+
+    res.json({ success: true, data: { deleted: true } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function reorderModules(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const { moduleIds } = req.body;
+
+    if (!Array.isArray(moduleIds)) {
+      throw new AppError('moduleIds array is required', 400);
+    }
+
+    const success = await workshopService.reorderLessonModules(id, req.user!.id, moduleIds);
+    if (!success) {
+      throw new AppError('Not authorized or lesson not found', 403);
+    }
+
+    res.json({ success: true, data: { reordered: true } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function getModules(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const modules = await workshopService.getLessonModules(id);
+    res.json({ success: true, data: { modules } });
   } catch (error) {
     next(error);
   }

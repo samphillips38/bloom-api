@@ -1,31 +1,38 @@
 import { db } from '../config/database';
 import {
-  workshopLessons,
-  workshopLessonContent,
-  workshopContentEdits,
-  workshopEditSuggestions,
-  workshopLessonRatings,
+  lessons,
+  lessonContent,
+  lessonModules,
+  lessonContentEdits,
+  lessonEditSuggestions,
+  lessonRatings,
   users,
-  type WorkshopLesson,
-  type WorkshopLessonContent,
-  type WorkshopContentEdit,
-  type WorkshopEditSuggestion,
+  type Lesson,
+  type LessonContent,
+  type LessonModule,
+  type LessonContentEdit,
+  type LessonEditSuggestion,
   type ContentData,
   type SourceReference,
 } from '../db/schema';
 import { eq, and, asc, desc, or, sql, ilike } from 'drizzle-orm';
 
 // ═══════════════════════════════════════════════════════
-//  Workshop Lesson interfaces
+//  Interfaces
 // ═══════════════════════════════════════════════════════
 
-export interface WorkshopLessonWithContent extends WorkshopLesson {
-  content: WorkshopLessonContent[];
+export interface LessonModuleWithContent extends LessonModule {
+  content: LessonContent[];
+}
+
+export interface LessonWithFullContent extends Lesson {
+  modules: LessonModuleWithContent[];
+  content: LessonContent[];
   authorName: string;
   authorAvatarUrl: string | null;
 }
 
-export interface WorkshopLessonSummary extends WorkshopLesson {
+export interface LessonSummary extends Lesson {
   authorName: string;
   pageCount: number;
   averageRating: number;
@@ -33,6 +40,7 @@ export interface WorkshopLessonSummary extends WorkshopLesson {
 
 export interface ContentPageMetadata {
   contentId: string;
+  moduleId?: string | null;
   authorName: string;
   authorAvatarUrl: string | null;
   sources: SourceReference[];
@@ -49,14 +57,15 @@ export interface LessonMetadata {
     updatedAt: Date;
     aiInvolvement: string;
   };
+  modules?: { id: string; title: string; description: string | null }[];
   pages: ContentPageMetadata[];
 }
 
 // ═══════════════════════════════════════════════════════
-//  CRUD: Workshop Lessons
+//  CRUD: Lessons (user-created)
 // ═══════════════════════════════════════════════════════
 
-export async function createWorkshopLesson(data: {
+export async function createLesson(data: {
   authorId: string;
   title: string;
   description?: string;
@@ -66,16 +75,18 @@ export async function createWorkshopLesson(data: {
   editPolicy?: string;
   aiInvolvement?: string;
   tags?: string[];
-}): Promise<WorkshopLesson> {
+}): Promise<Lesson> {
   const [lesson] = await db
-    .insert(workshopLessons)
+    .insert(lessons)
     .values({
       authorId: data.authorId,
       title: data.title,
       description: data.description,
       iconUrl: data.iconUrl,
       themeColor: data.themeColor || '#FF6B35',
+      isOfficial: false,
       visibility: data.visibility || 'private',
+      status: 'draft',
       editPolicy: data.editPolicy || 'approval',
       aiInvolvement: data.aiInvolvement || 'none',
       tags: data.tags || [],
@@ -84,95 +95,146 @@ export async function createWorkshopLesson(data: {
   return lesson;
 }
 
-export async function getWorkshopLessonById(lessonId: string): Promise<WorkshopLessonWithContent | null> {
+export async function getLessonById(lessonId: string): Promise<LessonWithFullContent | null> {
   const [lesson] = await db
     .select()
-    .from(workshopLessons)
-    .where(eq(workshopLessons.id, lessonId))
+    .from(lessons)
+    .where(eq(lessons.id, lessonId))
     .limit(1);
 
   if (!lesson) return null;
 
-  const [author] = await db
-    .select({ name: users.name, avatarUrl: users.avatarUrl })
-    .from(users)
-    .where(eq(users.id, lesson.authorId))
-    .limit(1);
+  let authorName = 'Bloom Team';
+  let authorAvatarUrl: string | null = null;
+
+  if (lesson.authorId) {
+    const [author] = await db
+      .select({ name: users.name, avatarUrl: users.avatarUrl })
+      .from(users)
+      .where(eq(users.id, lesson.authorId))
+      .limit(1);
+    authorName = author?.name || 'Unknown';
+    authorAvatarUrl = author?.avatarUrl || null;
+  }
+
+  // Fetch modules
+  const modules = await db
+    .select()
+    .from(lessonModules)
+    .where(eq(lessonModules.lessonId, lessonId))
+    .orderBy(asc(lessonModules.orderIndex));
 
   const content = await db
     .select()
-    .from(workshopLessonContent)
-    .where(eq(workshopLessonContent.workshopLessonId, lessonId))
-    .orderBy(asc(workshopLessonContent.orderIndex));
+    .from(lessonContent)
+    .where(eq(lessonContent.lessonId, lessonId))
+    .orderBy(asc(lessonContent.orderIndex));
+
+  // Group content into modules
+  const modulesWithContent: LessonModuleWithContent[] = modules.map(mod => ({
+    ...mod,
+    content: content.filter(c => c.moduleId === mod.id),
+  }));
 
   return {
     ...lesson,
+    modules: modulesWithContent,
     content,
-    authorName: author?.name || 'Unknown',
-    authorAvatarUrl: author?.avatarUrl || null,
+    authorName,
+    authorAvatarUrl,
   };
 }
 
 /**
- * Returns workshop lesson content in the same shape as a regular LessonWithContent,
- * so the lesson viewer can play it identically to an official course lesson.
+ * Returns lesson content in a unified shape for the lesson viewer.
  */
-export async function getWorkshopLessonForPlay(lessonId: string) {
+export async function getLessonForPlay(lessonId: string) {
   const [lesson] = await db
     .select()
-    .from(workshopLessons)
-    .where(eq(workshopLessons.id, lessonId))
+    .from(lessons)
+    .where(eq(lessons.id, lessonId))
     .limit(1);
 
   if (!lesson) return null;
 
-  const [author] = await db
-    .select({ name: users.name, avatarUrl: users.avatarUrl })
-    .from(users)
-    .where(eq(users.id, lesson.authorId))
-    .limit(1);
+  let authorName = 'Bloom Team';
+  let authorAvatarUrl: string | null = null;
+
+  if (lesson.authorId) {
+    const [author] = await db
+      .select({ name: users.name, avatarUrl: users.avatarUrl })
+      .from(users)
+      .where(eq(users.id, lesson.authorId))
+      .limit(1);
+    authorName = author?.name || 'Unknown';
+    authorAvatarUrl = author?.avatarUrl || null;
+  }
+
+  // Fetch modules
+  const modules = await db
+    .select()
+    .from(lessonModules)
+    .where(eq(lessonModules.lessonId, lessonId))
+    .orderBy(asc(lessonModules.orderIndex));
 
   const pages = await db
     .select()
-    .from(workshopLessonContent)
-    .where(eq(workshopLessonContent.workshopLessonId, lessonId))
-    .orderBy(asc(workshopLessonContent.orderIndex));
+    .from(lessonContent)
+    .where(eq(lessonContent.lessonId, lessonId))
+    .orderBy(asc(lessonContent.orderIndex));
 
-  // Transform into LessonWithContent format
   return {
     id: lesson.id,
-    levelId: lesson.id, // use lesson id as a placeholder
+    levelId: lesson.levelId || lesson.id,
     title: lesson.title,
     iconUrl: lesson.iconUrl,
-    type: 'lesson' as const,
-    orderIndex: 0,
+    type: lesson.type as 'lesson' | 'exercise' | 'quiz',
+    orderIndex: lesson.orderIndex,
+    isOfficial: lesson.isOfficial,
+    modules: modules.map(mod => ({
+      id: mod.id,
+      title: mod.title,
+      description: mod.description,
+      orderIndex: mod.orderIndex,
+      content: pages
+        .filter(p => p.moduleId === mod.id)
+        .map((page, idx) => ({
+          id: page.id,
+          lessonId: lesson.id,
+          moduleId: mod.id,
+          orderIndex: idx,
+          contentType: page.contentType,
+          contentData: page.contentData,
+        })),
+    })),
     content: pages.map((page, idx) => ({
       id: page.id,
       lessonId: lesson.id,
+      moduleId: page.moduleId,
       orderIndex: idx,
       contentType: page.contentType,
       contentData: page.contentData,
     })),
-    // Extra fields for the course detail view
+    // Extra fields for display
     authorId: lesson.authorId,
-    authorName: author?.name || 'Unknown',
-    authorAvatarUrl: author?.avatarUrl || null,
+    authorName,
+    authorAvatarUrl,
     description: lesson.description,
     themeColor: lesson.themeColor,
     aiInvolvement: lesson.aiInvolvement,
     tags: lesson.tags,
-    creatorName: author?.name || 'Unknown',
+    creatorName: authorName,
     visibility: lesson.visibility,
     status: lesson.status,
   };
 }
 
-export async function getMyWorkshopLessons(userId: string): Promise<WorkshopLessonSummary[]> {
-  const lessons = await db
+export async function getMyLessons(userId: string): Promise<LessonSummary[]> {
+  const myLessons = await db
     .select()
-    .from(workshopLessons)
-    .where(eq(workshopLessons.authorId, userId))
-    .orderBy(desc(workshopLessons.updatedAt));
+    .from(lessons)
+    .where(and(eq(lessons.authorId, userId), eq(lessons.isOfficial, false)))
+    .orderBy(desc(lessons.updatedAt));
 
   const [author] = await db
     .select({ name: users.name })
@@ -180,13 +242,13 @@ export async function getMyWorkshopLessons(userId: string): Promise<WorkshopLess
     .where(eq(users.id, userId))
     .limit(1);
 
-  const result: WorkshopLessonSummary[] = [];
-  for (const lesson of lessons) {
+  const result: LessonSummary[] = [];
+  for (const lesson of myLessons) {
     const [countResult] = await db
       .select({ count: sql<number>`count(*)` })
-      .from(workshopLessonContent)
-      .where(eq(workshopLessonContent.workshopLessonId, lesson.id));
-    
+      .from(lessonContent)
+      .where(eq(lessonContent.lessonId, lesson.id));
+
     result.push({
       ...lesson,
       authorName: author?.name || 'Unknown',
@@ -198,7 +260,7 @@ export async function getMyWorkshopLessons(userId: string): Promise<WorkshopLess
   return result;
 }
 
-export async function updateWorkshopLesson(
+export async function updateLesson(
   lessonId: string,
   userId: string,
   data: Partial<{
@@ -211,91 +273,98 @@ export async function updateWorkshopLesson(
     aiInvolvement: string;
     tags: string[];
   }>
-): Promise<WorkshopLesson | null> {
+): Promise<Lesson | null> {
   const [lesson] = await db
     .select()
-    .from(workshopLessons)
-    .where(eq(workshopLessons.id, lessonId))
+    .from(lessons)
+    .where(eq(lessons.id, lessonId))
     .limit(1);
 
-  if (!lesson || lesson.authorId !== userId) return null;
+  if (!lesson || lesson.isOfficial || lesson.authorId !== userId) return null;
 
   const [updated] = await db
-    .update(workshopLessons)
+    .update(lessons)
     .set({ ...data, updatedAt: new Date() })
-    .where(eq(workshopLessons.id, lessonId))
+    .where(eq(lessons.id, lessonId))
     .returning();
 
   return updated;
 }
 
-export async function deleteWorkshopLesson(lessonId: string, userId: string): Promise<boolean> {
+export async function deleteLesson(lessonId: string, userId: string): Promise<boolean> {
   const [lesson] = await db
     .select()
-    .from(workshopLessons)
-    .where(eq(workshopLessons.id, lessonId))
+    .from(lessons)
+    .where(eq(lessons.id, lessonId))
     .limit(1);
 
-  if (!lesson || lesson.authorId !== userId) return false;
+  if (!lesson || lesson.isOfficial || lesson.authorId !== userId) return false;
 
-  await db.delete(workshopLessons).where(eq(workshopLessons.id, lessonId));
+  await db.delete(lessons).where(eq(lessons.id, lessonId));
   return true;
 }
 
-export async function publishWorkshopLesson(lessonId: string, userId: string): Promise<WorkshopLesson | null> {
+export async function publishLesson(lessonId: string, userId: string): Promise<Lesson | null> {
   const [lesson] = await db
     .select()
-    .from(workshopLessons)
-    .where(eq(workshopLessons.id, lessonId))
+    .from(lessons)
+    .where(eq(lessons.id, lessonId))
     .limit(1);
 
-  if (!lesson || lesson.authorId !== userId) return null;
+  if (!lesson || lesson.isOfficial || lesson.authorId !== userId) return null;
 
   // Check there's at least one content page
   const [contentCount] = await db
     .select({ count: sql<number>`count(*)` })
-    .from(workshopLessonContent)
-    .where(eq(workshopLessonContent.workshopLessonId, lessonId));
+    .from(lessonContent)
+    .where(eq(lessonContent.lessonId, lessonId));
 
   if (Number(contentCount?.count || 0) === 0) return null;
 
   const [updated] = await db
-    .update(workshopLessons)
+    .update(lessons)
     .set({
       status: 'published',
       visibility: 'public',
       publishedAt: new Date(),
       updatedAt: new Date(),
     })
-    .where(eq(workshopLessons.id, lessonId))
+    .where(eq(lessons.id, lessonId))
     .returning();
 
   return updated;
 }
 
 // ═══════════════════════════════════════════════════════
-//  CRUD: Workshop Lesson Content (Pages)
+//  CRUD: Lesson Content (Pages)
 // ═══════════════════════════════════════════════════════
 
-export async function addWorkshopContent(data: {
-  workshopLessonId: string;
+export async function addLessonContent(data: {
+  lessonId: string;
+  moduleId?: string;
   contentType: string;
   contentData: ContentData;
   authorId: string;
   sources?: SourceReference[];
-}): Promise<WorkshopLessonContent> {
-  // Get next order index
+}): Promise<LessonContent> {
+  // Get next order index (within the module if specified, else across the whole lesson)
+  const conditions = [eq(lessonContent.lessonId, data.lessonId)];
+  if (data.moduleId) {
+    conditions.push(eq(lessonContent.moduleId, data.moduleId));
+  }
+
   const [maxOrder] = await db
     .select({ maxIdx: sql<number>`COALESCE(MAX(order_index), -1)` })
-    .from(workshopLessonContent)
-    .where(eq(workshopLessonContent.workshopLessonId, data.workshopLessonId));
+    .from(lessonContent)
+    .where(and(...conditions));
 
   const nextIndex = Number(maxOrder?.maxIdx ?? -1) + 1;
 
   const [content] = await db
-    .insert(workshopLessonContent)
+    .insert(lessonContent)
     .values({
-      workshopLessonId: data.workshopLessonId,
+      lessonId: data.lessonId,
+      moduleId: data.moduleId || null,
       orderIndex: nextIndex,
       contentType: data.contentType,
       contentData: data.contentData,
@@ -305,8 +374,8 @@ export async function addWorkshopContent(data: {
     .returning();
 
   // Record edit history
-  await db.insert(workshopContentEdits).values({
-    workshopLessonId: data.workshopLessonId,
+  await db.insert(lessonContentEdits).values({
+    lessonId: data.lessonId,
     contentId: content.id,
     editorId: data.authorId,
     editType: 'create',
@@ -315,14 +384,14 @@ export async function addWorkshopContent(data: {
 
   // Update lesson timestamp
   await db
-    .update(workshopLessons)
+    .update(lessons)
     .set({ updatedAt: new Date() })
-    .where(eq(workshopLessons.id, data.workshopLessonId));
+    .where(eq(lessons.id, data.lessonId));
 
   return content;
 }
 
-export async function updateWorkshopContent(
+export async function updateLessonContent(
   contentId: string,
   editorId: string,
   data: {
@@ -330,11 +399,11 @@ export async function updateWorkshopContent(
     contentData?: ContentData;
     sources?: SourceReference[];
   }
-): Promise<WorkshopLessonContent | null> {
+): Promise<LessonContent | null> {
   const [existing] = await db
     .select()
-    .from(workshopLessonContent)
-    .where(eq(workshopLessonContent.id, contentId))
+    .from(lessonContent)
+    .where(eq(lessonContent.id, contentId))
     .limit(1);
 
   if (!existing) return null;
@@ -342,20 +411,21 @@ export async function updateWorkshopContent(
   // Check edit permissions
   const [lesson] = await db
     .select()
-    .from(workshopLessons)
-    .where(eq(workshopLessons.id, existing.workshopLessonId))
+    .from(lessons)
+    .where(eq(lessons.id, existing.lessonId))
     .limit(1);
 
   if (!lesson) return null;
 
-  // Only author or open-edit lessons allow direct edits
+  // Official lessons are not editable; user lessons: only author or open-edit
+  if (lesson.isOfficial) return null;
   if (lesson.authorId !== editorId && lesson.editPolicy !== 'open') {
     return null;
   }
 
   // Record edit history
-  await db.insert(workshopContentEdits).values({
-    workshopLessonId: existing.workshopLessonId,
+  await db.insert(lessonContentEdits).values({
+    lessonId: existing.lessonId,
     contentId: contentId,
     editorId: editorId,
     editType: 'update',
@@ -368,9 +438,9 @@ export async function updateWorkshopContent(
   if (data.sources) updateData.sources = data.sources;
 
   const [updated] = await db
-    .update(workshopLessonContent)
+    .update(lessonContent)
     .set(updateData)
-    .where(eq(workshopLessonContent.id, contentId))
+    .where(eq(lessonContent.id, contentId))
     .returning();
 
   // Update lesson timestamp and AI involvement
@@ -378,39 +448,40 @@ export async function updateWorkshopContent(
   if (lesson.aiInvolvement === 'full' && editorId !== lesson.authorId) {
     lessonUpdate.aiInvolvement = 'collaboration';
   }
-  await db.update(workshopLessons).set(lessonUpdate).where(eq(workshopLessons.id, existing.workshopLessonId));
+  await db.update(lessons).set(lessonUpdate).where(eq(lessons.id, existing.lessonId));
 
   return updated;
 }
 
-export async function reorderWorkshopContent(
-  workshopLessonId: string,
+export async function reorderLessonContent(
+  lessonId: string,
   userId: string,
   contentIds: string[]
 ): Promise<boolean> {
   const [lesson] = await db
     .select()
-    .from(workshopLessons)
-    .where(eq(workshopLessons.id, workshopLessonId))
+    .from(lessons)
+    .where(eq(lessons.id, lessonId))
     .limit(1);
 
-  if (!lesson || (lesson.authorId !== userId && lesson.editPolicy !== 'open')) return false;
+  if (!lesson || lesson.isOfficial) return false;
+  if (lesson.authorId !== userId && lesson.editPolicy !== 'open') return false;
 
   for (let i = 0; i < contentIds.length; i++) {
     await db
-      .update(workshopLessonContent)
+      .update(lessonContent)
       .set({ orderIndex: i })
       .where(
         and(
-          eq(workshopLessonContent.id, contentIds[i]),
-          eq(workshopLessonContent.workshopLessonId, workshopLessonId)
+          eq(lessonContent.id, contentIds[i]),
+          eq(lessonContent.lessonId, lessonId)
         )
       );
   }
 
   // Record edit history
-  await db.insert(workshopContentEdits).values({
-    workshopLessonId,
+  await db.insert(lessonContentEdits).values({
+    lessonId,
     contentId: null,
     editorId: userId,
     editType: 'reorder',
@@ -418,48 +489,49 @@ export async function reorderWorkshopContent(
   });
 
   await db
-    .update(workshopLessons)
+    .update(lessons)
     .set({ updatedAt: new Date() })
-    .where(eq(workshopLessons.id, workshopLessonId));
+    .where(eq(lessons.id, lessonId));
 
   return true;
 }
 
-export async function deleteWorkshopContent(
+export async function deleteLessonContent(
   contentId: string,
   userId: string
 ): Promise<boolean> {
   const [existing] = await db
     .select()
-    .from(workshopLessonContent)
-    .where(eq(workshopLessonContent.id, contentId))
+    .from(lessonContent)
+    .where(eq(lessonContent.id, contentId))
     .limit(1);
 
   if (!existing) return false;
 
   const [lesson] = await db
     .select()
-    .from(workshopLessons)
-    .where(eq(workshopLessons.id, existing.workshopLessonId))
+    .from(lessons)
+    .where(eq(lessons.id, existing.lessonId))
     .limit(1);
 
-  if (!lesson || (lesson.authorId !== userId && lesson.editPolicy !== 'open')) return false;
+  if (!lesson || lesson.isOfficial) return false;
+  if (lesson.authorId !== userId && lesson.editPolicy !== 'open') return false;
 
   // Record edit history
-  await db.insert(workshopContentEdits).values({
-    workshopLessonId: existing.workshopLessonId,
+  await db.insert(lessonContentEdits).values({
+    lessonId: existing.lessonId,
     contentId: null,
     editorId: userId,
     editType: 'delete',
     previousData: { contentType: existing.contentType, contentData: existing.contentData },
   });
 
-  await db.delete(workshopLessonContent).where(eq(workshopLessonContent.id, contentId));
+  await db.delete(lessonContent).where(eq(lessonContent.id, contentId));
 
   await db
-    .update(workshopLessons)
+    .update(lessons)
     .set({ updatedAt: new Date() })
-    .where(eq(workshopLessons.id, existing.workshopLessonId));
+    .where(eq(lessons.id, existing.lessonId));
 
   return true;
 }
@@ -468,12 +540,12 @@ export async function deleteWorkshopContent(
 //  History & Metadata
 // ═══════════════════════════════════════════════════════
 
-export async function getEditHistory(workshopLessonId: string): Promise<(WorkshopContentEdit & { editorName: string })[]> {
+export async function getEditHistory(lessonId: string): Promise<(LessonContentEdit & { editorName: string })[]> {
   const edits = await db
     .select()
-    .from(workshopContentEdits)
-    .where(eq(workshopContentEdits.workshopLessonId, workshopLessonId))
-    .orderBy(desc(workshopContentEdits.createdAt));
+    .from(lessonContentEdits)
+    .where(eq(lessonContentEdits.lessonId, lessonId))
+    .orderBy(desc(lessonContentEdits.createdAt));
 
   const result = [];
   for (const edit of edits) {
@@ -492,54 +564,68 @@ export async function getEditHistory(workshopLessonId: string): Promise<(Worksho
   return result;
 }
 
-export async function getLessonMetadata(workshopLessonId: string): Promise<LessonMetadata | null> {
+export async function getLessonMetadata(lessonId: string): Promise<LessonMetadata | null> {
   const [lesson] = await db
     .select()
-    .from(workshopLessons)
-    .where(eq(workshopLessons.id, workshopLessonId))
+    .from(lessons)
+    .where(eq(lessons.id, lessonId))
     .limit(1);
 
   if (!lesson) return null;
 
-  const [author] = await db
-    .select({ name: users.name, avatarUrl: users.avatarUrl })
-    .from(users)
-    .where(eq(users.id, lesson.authorId))
-    .limit(1);
+  let authorName = 'Bloom Team';
+  let authorAvatarUrl: string | null = null;
+
+  if (lesson.authorId) {
+    const [author] = await db
+      .select({ name: users.name, avatarUrl: users.avatarUrl })
+      .from(users)
+      .where(eq(users.id, lesson.authorId))
+      .limit(1);
+    authorName = author?.name || 'Unknown';
+    authorAvatarUrl = author?.avatarUrl || null;
+  }
 
   const [editCount] = await db
     .select({ count: sql<number>`count(*)` })
-    .from(workshopContentEdits)
-    .where(eq(workshopContentEdits.workshopLessonId, workshopLessonId));
+    .from(lessonContentEdits)
+    .where(eq(lessonContentEdits.lessonId, lessonId));
 
   const contentPages = await db
     .select()
-    .from(workshopLessonContent)
-    .where(eq(workshopLessonContent.workshopLessonId, workshopLessonId))
-    .orderBy(asc(workshopLessonContent.orderIndex));
+    .from(lessonContent)
+    .where(eq(lessonContent.lessonId, lessonId))
+    .orderBy(asc(lessonContent.orderIndex));
 
   const pages: ContentPageMetadata[] = [];
   for (const page of contentPages) {
-    const [pageAuthor] = await db
-      .select({ name: users.name, avatarUrl: users.avatarUrl })
-      .from(users)
-      .where(eq(users.id, page.authorId))
-      .limit(1);
+    let pageAuthorName = authorName;
+    let pageAuthorAvatarUrl = authorAvatarUrl;
+
+    if (page.authorId) {
+      const [pageAuthor] = await db
+        .select({ name: users.name, avatarUrl: users.avatarUrl })
+        .from(users)
+        .where(eq(users.id, page.authorId))
+        .limit(1);
+      pageAuthorName = pageAuthor?.name || 'Unknown';
+      pageAuthorAvatarUrl = pageAuthor?.avatarUrl || null;
+    }
 
     // Get editors for this page
     const pageEdits = await db
       .select({
-        editorId: workshopContentEdits.editorId,
-        createdAt: workshopContentEdits.createdAt,
+        editorId: lessonContentEdits.editorId,
+        createdAt: lessonContentEdits.createdAt,
       })
-      .from(workshopContentEdits)
+      .from(lessonContentEdits)
       .where(
         and(
-          eq(workshopContentEdits.contentId, page.id),
-          eq(workshopContentEdits.editType, 'update')
+          eq(lessonContentEdits.contentId, page.id),
+          eq(lessonContentEdits.editType, 'update')
         )
       )
-      .orderBy(desc(workshopContentEdits.createdAt));
+      .orderBy(desc(lessonContentEdits.createdAt));
 
     const editors = [];
     const seenEditors = new Set<string>();
@@ -562,23 +648,32 @@ export async function getLessonMetadata(workshopLessonId: string): Promise<Lesso
 
     pages.push({
       contentId: page.id,
-      authorName: pageAuthor?.name || 'Unknown',
-      authorAvatarUrl: pageAuthor?.avatarUrl || null,
+      moduleId: page.moduleId,
+      authorName: pageAuthorName,
+      authorAvatarUrl: pageAuthorAvatarUrl,
       sources: (page.sources as SourceReference[]) || [],
       lastEdited: page.updatedAt,
       editors,
     });
   }
 
+  // Fetch modules
+  const modules = await db
+    .select()
+    .from(lessonModules)
+    .where(eq(lessonModules.lessonId, lessonId))
+    .orderBy(asc(lessonModules.orderIndex));
+
   return {
     lesson: {
-      authorName: author?.name || 'Unknown',
-      authorAvatarUrl: author?.avatarUrl || null,
+      authorName,
+      authorAvatarUrl,
       totalEdits: Number(editCount?.count || 0),
       createdAt: lesson.createdAt,
       updatedAt: lesson.updatedAt,
       aiInvolvement: lesson.aiInvolvement,
     },
+    modules: modules.map(m => ({ id: m.id, title: m.title, description: m.description })),
     pages,
   };
 }
@@ -588,15 +683,15 @@ export async function getLessonMetadata(workshopLessonId: string): Promise<Lesso
 // ═══════════════════════════════════════════════════════
 
 export async function submitEditSuggestion(data: {
-  workshopLessonId: string;
+  lessonId: string;
   contentId?: string;
   suggesterId: string;
   suggestedData: unknown;
-}): Promise<WorkshopEditSuggestion> {
+}): Promise<LessonEditSuggestion> {
   const [suggestion] = await db
-    .insert(workshopEditSuggestions)
+    .insert(lessonEditSuggestions)
     .values({
-      workshopLessonId: data.workshopLessonId,
+      lessonId: data.lessonId,
       contentId: data.contentId || null,
       suggesterId: data.suggesterId,
       suggestedData: data.suggestedData,
@@ -606,19 +701,19 @@ export async function submitEditSuggestion(data: {
 }
 
 export async function getEditSuggestions(
-  workshopLessonId: string,
+  lessonId: string,
   status?: string
-): Promise<(WorkshopEditSuggestion & { suggesterName: string })[]> {
-  const conditions = [eq(workshopEditSuggestions.workshopLessonId, workshopLessonId)];
+): Promise<(LessonEditSuggestion & { suggesterName: string })[]> {
+  const conditions = [eq(lessonEditSuggestions.lessonId, lessonId)];
   if (status) {
-    conditions.push(eq(workshopEditSuggestions.status, status));
+    conditions.push(eq(lessonEditSuggestions.status, status));
   }
 
   const suggestions = await db
     .select()
-    .from(workshopEditSuggestions)
+    .from(lessonEditSuggestions)
     .where(and(...conditions))
-    .orderBy(desc(workshopEditSuggestions.createdAt));
+    .orderBy(desc(lessonEditSuggestions.createdAt));
 
   const result = [];
   for (const suggestion of suggestions) {
@@ -641,11 +736,11 @@ export async function reviewEditSuggestion(
   suggestionId: string,
   reviewerId: string,
   action: 'approved' | 'rejected'
-): Promise<WorkshopEditSuggestion | null> {
+): Promise<LessonEditSuggestion | null> {
   const [suggestion] = await db
     .select()
-    .from(workshopEditSuggestions)
-    .where(eq(workshopEditSuggestions.id, suggestionId))
+    .from(lessonEditSuggestions)
+    .where(eq(lessonEditSuggestions.id, suggestionId))
     .limit(1);
 
   if (!suggestion) return null;
@@ -653,8 +748,8 @@ export async function reviewEditSuggestion(
   // Verify the reviewer is the lesson author
   const [lesson] = await db
     .select()
-    .from(workshopLessons)
-    .where(eq(workshopLessons.id, suggestion.workshopLessonId))
+    .from(lessons)
+    .where(eq(lessons.id, suggestion.lessonId))
     .limit(1);
 
   if (!lesson || lesson.authorId !== reviewerId) return null;
@@ -662,7 +757,7 @@ export async function reviewEditSuggestion(
   // If approving, apply the edit
   if (action === 'approved' && suggestion.contentId && suggestion.suggestedData) {
     const suggestedContent = suggestion.suggestedData as { contentType?: string; contentData?: ContentData; sources?: SourceReference[] };
-    await updateWorkshopContent(suggestion.contentId, reviewerId, {
+    await updateLessonContent(suggestion.contentId, reviewerId, {
       contentType: suggestedContent.contentType,
       contentData: suggestedContent.contentData,
       sources: suggestedContent.sources,
@@ -670,89 +765,94 @@ export async function reviewEditSuggestion(
   }
 
   const [updated] = await db
-    .update(workshopEditSuggestions)
+    .update(lessonEditSuggestions)
     .set({
       status: action,
       reviewerId,
       reviewedAt: new Date(),
     })
-    .where(eq(workshopEditSuggestions.id, suggestionId))
+    .where(eq(lessonEditSuggestions.id, suggestionId))
     .returning();
 
   return updated;
 }
 
 // ═══════════════════════════════════════════════════════
-//  Browse public lessons
+//  Browse public lessons (user-created, published)
 // ═══════════════════════════════════════════════════════
 
-export async function browseWorkshopLessons(opts?: {
+export async function browseLessons(opts?: {
   search?: string;
   tag?: string;
   limit?: number;
   offset?: number;
   sort?: 'recent' | 'rating' | 'popular';
-}): Promise<{ lessons: WorkshopLessonSummary[]; total: number }> {
+}): Promise<{ lessons: LessonSummary[]; total: number }> {
   const limit = opts?.limit || 20;
   const offset = opts?.offset || 0;
   const sort = opts?.sort || 'rating';
 
   const conditions = [
-    eq(workshopLessons.status, 'published'),
-    eq(workshopLessons.visibility, 'public'),
+    eq(lessons.isOfficial, false),
+    eq(lessons.status, 'published'),
+    eq(lessons.visibility, 'public'),
   ];
 
   // Filter by tag using jsonb containment
   if (opts?.tag) {
-    conditions.push(sql`${workshopLessons.tags}::jsonb @> ${JSON.stringify([opts.tag])}::jsonb`);
+    conditions.push(sql`${lessons.tags}::jsonb @> ${JSON.stringify([opts.tag])}::jsonb`);
   }
 
   // Filter by search term
   if (opts?.search) {
     conditions.push(
       or(
-        ilike(workshopLessons.title, `%${opts.search}%`),
-        ilike(workshopLessons.description, `%${opts.search}%`)
+        ilike(lessons.title, `%${opts.search}%`),
+        ilike(lessons.description, `%${opts.search}%`)
       )!
     );
   }
 
   // Determine sort order
   const orderBy = sort === 'recent'
-    ? desc(workshopLessons.publishedAt)
+    ? desc(lessons.publishedAt)
     : sort === 'popular'
-      ? desc(workshopLessons.viewCount)
-      : sql`CASE WHEN ${workshopLessons.ratingCount} = 0 THEN 0 ELSE ${workshopLessons.ratingSum}::float / ${workshopLessons.ratingCount} END DESC`;
+      ? desc(lessons.viewCount)
+      : sql`CASE WHEN ${lessons.ratingCount} = 0 THEN 0 ELSE ${lessons.ratingSum}::float / ${lessons.ratingCount} END DESC`;
 
-  const lessons = await db
+  const lessonRows = await db
     .select()
-    .from(workshopLessons)
+    .from(lessons)
     .where(and(...conditions))
-    .orderBy(orderBy, desc(workshopLessons.viewCount))
+    .orderBy(orderBy, desc(lessons.viewCount))
     .limit(limit)
     .offset(offset);
 
   const [totalResult] = await db
     .select({ count: sql<number>`count(*)` })
-    .from(workshopLessons)
+    .from(lessons)
     .where(and(...conditions));
 
-  const result: WorkshopLessonSummary[] = [];
-  for (const lesson of lessons) {
-    const [author] = await db
-      .select({ name: users.name })
-      .from(users)
-      .where(eq(users.id, lesson.authorId))
-      .limit(1);
+  const result: LessonSummary[] = [];
+  for (const lesson of lessonRows) {
+    let authorName = 'Unknown';
+    if (lesson.authorId) {
+      const [author] = await db
+        .select({ name: users.name })
+        .from(users)
+        .where(eq(users.id, lesson.authorId))
+        .limit(1);
+      authorName = author?.name || 'Unknown';
+    }
 
     const [countResult] = await db
       .select({ count: sql<number>`count(*)` })
-      .from(workshopLessonContent)
-      .where(eq(workshopLessonContent.workshopLessonId, lesson.id));
+      .from(lessonContent)
+      .where(eq(lessonContent.lessonId, lesson.id));
 
     result.push({
       ...lesson,
-      authorName: author?.name || 'Unknown',
+      authorName,
       pageCount: Number(countResult?.count || 0),
       averageRating: lesson.ratingCount > 0 ? lesson.ratingSum / lesson.ratingCount : 0,
     });
@@ -768,9 +868,9 @@ export async function browseWorkshopLessons(opts?: {
 export async function getPopularTags(limit: number = 20): Promise<{ tag: string; count: number }[]> {
   const result = await db.execute(sql`
     SELECT tag, COUNT(*) as count
-    FROM workshop_lessons,
+    FROM lessons,
     jsonb_array_elements_text(tags) AS tag
-    WHERE status = 'published' AND visibility = 'public'
+    WHERE status = 'published' AND visibility = 'public' AND is_official = false
     GROUP BY tag
     ORDER BY count DESC
     LIMIT ${limit}
@@ -786,8 +886,8 @@ export async function getPopularTags(limit: number = 20): Promise<{ tag: string;
 //  Ratings
 // ═══════════════════════════════════════════════════════
 
-export async function rateWorkshopLesson(
-  workshopLessonId: string,
+export async function rateLesson(
+  lessonId: string,
   userId: string,
   rating: number
 ): Promise<{ averageRating: number; ratingCount: number }> {
@@ -796,11 +896,11 @@ export async function rateWorkshopLesson(
   // Check for existing rating
   const [existing] = await db
     .select()
-    .from(workshopLessonRatings)
+    .from(lessonRatings)
     .where(
       and(
-        eq(workshopLessonRatings.workshopLessonId, workshopLessonId),
-        eq(workshopLessonRatings.userId, userId)
+        eq(lessonRatings.lessonId, lessonId),
+        eq(lessonRatings.userId, userId)
       )
     )
     .limit(1);
@@ -809,36 +909,36 @@ export async function rateWorkshopLesson(
     // Update existing rating
     const diff = rating - existing.rating;
     await db
-      .update(workshopLessonRatings)
+      .update(lessonRatings)
       .set({ rating })
-      .where(eq(workshopLessonRatings.id, existing.id));
+      .where(eq(lessonRatings.id, existing.id));
 
     await db
-      .update(workshopLessons)
+      .update(lessons)
       .set({
-        ratingSum: sql`${workshopLessons.ratingSum} + ${diff}`,
+        ratingSum: sql`${lessons.ratingSum} + ${diff}`,
       })
-      .where(eq(workshopLessons.id, workshopLessonId));
+      .where(eq(lessons.id, lessonId));
   } else {
     // Insert new rating
     await db
-      .insert(workshopLessonRatings)
-      .values({ workshopLessonId, userId, rating });
+      .insert(lessonRatings)
+      .values({ lessonId, userId, rating });
 
     await db
-      .update(workshopLessons)
+      .update(lessons)
       .set({
-        ratingSum: sql`${workshopLessons.ratingSum} + ${rating}`,
-        ratingCount: sql`${workshopLessons.ratingCount} + 1`,
+        ratingSum: sql`${lessons.ratingSum} + ${rating}`,
+        ratingCount: sql`${lessons.ratingCount} + 1`,
       })
-      .where(eq(workshopLessons.id, workshopLessonId));
+      .where(eq(lessons.id, lessonId));
   }
 
   // Return updated values
   const [lesson] = await db
-    .select({ ratingSum: workshopLessons.ratingSum, ratingCount: workshopLessons.ratingCount })
-    .from(workshopLessons)
-    .where(eq(workshopLessons.id, workshopLessonId))
+    .select({ ratingSum: lessons.ratingSum, ratingCount: lessons.ratingCount })
+    .from(lessons)
+    .where(eq(lessons.id, lessonId))
     .limit(1);
 
   return {
@@ -847,50 +947,55 @@ export async function rateWorkshopLesson(
   };
 }
 
-export async function incrementViewCount(workshopLessonId: string): Promise<void> {
+export async function incrementViewCount(lessonId: string): Promise<void> {
   await db
-    .update(workshopLessons)
-    .set({ viewCount: sql`${workshopLessons.viewCount} + 1` })
-    .where(eq(workshopLessons.id, workshopLessonId));
+    .update(lessons)
+    .set({ viewCount: sql`${lessons.viewCount} + 1` })
+    .where(eq(lessons.id, lessonId));
 }
 
 // ═══════════════════════════════════════════════════════
 //  Get lessons grouped by tags (for Courses page)
 // ═══════════════════════════════════════════════════════
 
-export async function getLessonsByTag(tag: string, limit: number = 10): Promise<WorkshopLessonSummary[]> {
-  const lessons = await db
+export async function getLessonsByTag(tag: string, limit: number = 10): Promise<LessonSummary[]> {
+  const lessonRows = await db
     .select()
-    .from(workshopLessons)
+    .from(lessons)
     .where(
       and(
-        eq(workshopLessons.status, 'published'),
-        eq(workshopLessons.visibility, 'public'),
-        sql`${workshopLessons.tags}::jsonb @> ${JSON.stringify([tag])}::jsonb`
+        eq(lessons.isOfficial, false),
+        eq(lessons.status, 'published'),
+        eq(lessons.visibility, 'public'),
+        sql`${lessons.tags}::jsonb @> ${JSON.stringify([tag])}::jsonb`
       )
     )
     .orderBy(
-      sql`CASE WHEN ${workshopLessons.ratingCount} = 0 THEN 0 ELSE ${workshopLessons.ratingSum}::float / ${workshopLessons.ratingCount} END DESC`,
-      desc(workshopLessons.viewCount)
+      sql`CASE WHEN ${lessons.ratingCount} = 0 THEN 0 ELSE ${lessons.ratingSum}::float / ${lessons.ratingCount} END DESC`,
+      desc(lessons.viewCount)
     )
     .limit(limit);
 
-  const result: WorkshopLessonSummary[] = [];
-  for (const lesson of lessons) {
-    const [author] = await db
-      .select({ name: users.name })
-      .from(users)
-      .where(eq(users.id, lesson.authorId))
-      .limit(1);
+  const result: LessonSummary[] = [];
+  for (const lesson of lessonRows) {
+    let authorName = 'Unknown';
+    if (lesson.authorId) {
+      const [author] = await db
+        .select({ name: users.name })
+        .from(users)
+        .where(eq(users.id, lesson.authorId))
+        .limit(1);
+      authorName = author?.name || 'Unknown';
+    }
 
     const [countResult] = await db
       .select({ count: sql<number>`count(*)` })
-      .from(workshopLessonContent)
-      .where(eq(workshopLessonContent.workshopLessonId, lesson.id));
+      .from(lessonContent)
+      .where(eq(lessonContent.lessonId, lesson.id));
 
     result.push({
       ...lesson,
-      authorName: author?.name || 'Unknown',
+      authorName,
       pageCount: Number(countResult?.count || 0),
       averageRating: lesson.ratingCount > 0 ? lesson.ratingSum / lesson.ratingCount : 0,
     });
@@ -904,17 +1009,18 @@ export async function getLessonsByTag(tag: string, limit: number = 10): Promise<
 // ═══════════════════════════════════════════════════════
 
 export async function bulkInsertContent(
-  workshopLessonId: string,
+  lessonId: string,
   authorId: string,
-  pages: { contentType: string; contentData: ContentData }[]
-): Promise<WorkshopLessonContent[]> {
-  const result: WorkshopLessonContent[] = [];
+  pages: { contentType: string; contentData: ContentData; moduleId?: string }[]
+): Promise<LessonContent[]> {
+  const result: LessonContent[] = [];
 
   for (let i = 0; i < pages.length; i++) {
     const [content] = await db
-      .insert(workshopLessonContent)
+      .insert(lessonContent)
       .values({
-        workshopLessonId,
+        lessonId,
+        moduleId: pages[i].moduleId || null,
         orderIndex: i,
         contentType: pages[i].contentType,
         contentData: pages[i].contentData,
@@ -923,8 +1029,8 @@ export async function bulkInsertContent(
       })
       .returning();
 
-    await db.insert(workshopContentEdits).values({
-      workshopLessonId,
+    await db.insert(lessonContentEdits).values({
+      lessonId,
       contentId: content.id,
       editorId: authorId,
       editType: 'create',
@@ -935,9 +1041,9 @@ export async function bulkInsertContent(
   }
 
   await db
-    .update(workshopLessons)
+    .update(lessons)
     .set({ updatedAt: new Date() })
-    .where(eq(workshopLessons.id, workshopLessonId));
+    .where(eq(lessons.id, lessonId));
 
   return result;
 }
@@ -946,15 +1052,210 @@ export async function bulkInsertContent(
 //  Permission check helper
 // ═══════════════════════════════════════════════════════
 
-export async function canUserEditLesson(workshopLessonId: string, userId: string): Promise<boolean> {
+export async function canUserEditLesson(lessonId: string, userId: string): Promise<boolean> {
   const [lesson] = await db
     .select()
-    .from(workshopLessons)
-    .where(eq(workshopLessons.id, workshopLessonId))
+    .from(lessons)
+    .where(eq(lessons.id, lessonId))
     .limit(1);
 
   if (!lesson) return false;
+  if (lesson.isOfficial) return false; // Official lessons are never editable
   if (lesson.authorId === userId) return true;
   if (lesson.editPolicy === 'open' && lesson.visibility === 'public') return true;
   return false;
+}
+
+// ═══════════════════════════════════════════════════════
+//  CRUD: Lesson Modules
+// ═══════════════════════════════════════════════════════
+
+export async function createLessonModule(data: {
+  lessonId: string;
+  title: string;
+  description?: string;
+  userId: string;
+}): Promise<LessonModule | null> {
+  // Verify permission
+  const canEdit = await canUserEditLesson(data.lessonId, data.userId);
+  if (!canEdit) return null;
+
+  // Get next order index
+  const [maxOrder] = await db
+    .select({ maxIdx: sql<number>`COALESCE(MAX(order_index), -1)` })
+    .from(lessonModules)
+    .where(eq(lessonModules.lessonId, data.lessonId));
+
+  const nextIndex = Number(maxOrder?.maxIdx ?? -1) + 1;
+
+  const [module] = await db
+    .insert(lessonModules)
+    .values({
+      lessonId: data.lessonId,
+      title: data.title,
+      description: data.description || null,
+      orderIndex: nextIndex,
+    })
+    .returning();
+
+  await db
+    .update(lessons)
+    .set({ updatedAt: new Date() })
+    .where(eq(lessons.id, data.lessonId));
+
+  return module;
+}
+
+export async function updateLessonModule(
+  moduleId: string,
+  userId: string,
+  data: { title?: string; description?: string }
+): Promise<LessonModule | null> {
+  const [module] = await db
+    .select()
+    .from(lessonModules)
+    .where(eq(lessonModules.id, moduleId))
+    .limit(1);
+
+  if (!module) return null;
+
+  const canEdit = await canUserEditLesson(module.lessonId, userId);
+  if (!canEdit) return null;
+
+  const [updated] = await db
+    .update(lessonModules)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(lessonModules.id, moduleId))
+    .returning();
+
+  await db
+    .update(lessons)
+    .set({ updatedAt: new Date() })
+    .where(eq(lessons.id, module.lessonId));
+
+  return updated;
+}
+
+export async function deleteLessonModule(moduleId: string, userId: string): Promise<boolean> {
+  const [module] = await db
+    .select()
+    .from(lessonModules)
+    .where(eq(lessonModules.id, moduleId))
+    .limit(1);
+
+  if (!module) return false;
+
+  const canEdit = await canUserEditLesson(module.lessonId, userId);
+  if (!canEdit) return false;
+
+  await db.delete(lessonModules).where(eq(lessonModules.id, moduleId));
+
+  await db
+    .update(lessons)
+    .set({ updatedAt: new Date() })
+    .where(eq(lessons.id, module.lessonId));
+
+  return true;
+}
+
+export async function reorderLessonModules(
+  lessonId: string,
+  userId: string,
+  moduleIds: string[]
+): Promise<boolean> {
+  const canEdit = await canUserEditLesson(lessonId, userId);
+  if (!canEdit) return false;
+
+  for (let i = 0; i < moduleIds.length; i++) {
+    await db
+      .update(lessonModules)
+      .set({ orderIndex: i })
+      .where(
+        and(
+          eq(lessonModules.id, moduleIds[i]),
+          eq(lessonModules.lessonId, lessonId)
+        )
+      );
+  }
+
+  await db
+    .update(lessons)
+    .set({ updatedAt: new Date() })
+    .where(eq(lessons.id, lessonId));
+
+  return true;
+}
+
+export async function getLessonModules(lessonId: string): Promise<LessonModule[]> {
+  return db
+    .select()
+    .from(lessonModules)
+    .where(eq(lessonModules.lessonId, lessonId))
+    .orderBy(asc(lessonModules.orderIndex));
+}
+
+/**
+ * Bulk-create modules and their content pages for a lesson (used by AI generation).
+ */
+export async function bulkInsertModulesWithContent(
+  lessonId: string,
+  authorId: string,
+  modulesData: {
+    title: string;
+    description?: string;
+    pages: { contentType: string; contentData: ContentData }[];
+  }[]
+): Promise<LessonModuleWithContent[]> {
+  const result: LessonModuleWithContent[] = [];
+
+  for (let mi = 0; mi < modulesData.length; mi++) {
+    const modData = modulesData[mi];
+
+    // Create the module
+    const [module] = await db
+      .insert(lessonModules)
+      .values({
+        lessonId,
+        title: modData.title,
+        description: modData.description || null,
+        orderIndex: mi,
+      })
+      .returning();
+
+    // Insert pages for this module
+    const contentItems: LessonContent[] = [];
+    for (let pi = 0; pi < modData.pages.length; pi++) {
+      const [content] = await db
+        .insert(lessonContent)
+        .values({
+          lessonId,
+          moduleId: module.id,
+          orderIndex: pi,
+          contentType: modData.pages[pi].contentType,
+          contentData: modData.pages[pi].contentData,
+          authorId,
+          sources: [],
+        })
+        .returning();
+
+      await db.insert(lessonContentEdits).values({
+        lessonId,
+        contentId: content.id,
+        editorId: authorId,
+        editType: 'create',
+        previousData: null,
+      });
+
+      contentItems.push(content);
+    }
+
+    result.push({ ...module, content: contentItems });
+  }
+
+  await db
+    .update(lessons)
+    .set({ updatedAt: new Date() })
+    .where(eq(lessons.id, lessonId));
+
+  return result;
 }

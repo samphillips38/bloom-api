@@ -19,7 +19,7 @@ export const users = pgTable('users', {
 export const usersRelations = relations(users, ({ many, one }) => ({
   progress: many(userProgress),
   streak: one(streaks),
-  workshopLessons: many(workshopLessons),
+  lessons: many(lessons),
 }));
 
 // ============ STREAKS ============
@@ -98,15 +98,35 @@ export const levelsRelations = relations(levels, ({ one, many }) => ({
   lessons: many(lessons),
 }));
 
-// ============ LESSONS ============
+// ============ LESSONS (Unified — official + user-created) ============
 export const lessons = pgTable('lessons', {
   id: uuid('id').primaryKey().defaultRandom(),
-  levelId: uuid('level_id').notNull().references(() => levels.id, { onDelete: 'cascade' }),
+  // For official lessons (part of a course → level hierarchy)
+  levelId: uuid('level_id').references(() => levels.id, { onDelete: 'cascade' }),
+  // For user-created lessons
+  authorId: uuid('author_id').references(() => users.id, { onDelete: 'cascade' }),
   title: varchar('title', { length: 255 }).notNull(),
+  description: text('description'),
   iconUrl: text('icon_url'),
+  themeColor: varchar('theme_color', { length: 7 }).default('#FF6B35'),
   type: varchar('type', { length: 50 }).notNull().default('lesson'), // lesson, exercise, quiz
   orderIndex: integer('order_index').notNull().default(0),
+  // Official vs user-created
+  isOfficial: boolean('is_official').notNull().default(false),
+  // Publishing & visibility (user-created lessons)
+  visibility: varchar('visibility', { length: 20 }).notNull().default('private'), // 'private' | 'public'
+  status: varchar('status', { length: 20 }).notNull().default('draft'), // 'draft' | 'published'
+  editPolicy: varchar('edit_policy', { length: 20 }).notNull().default('approval'), // 'open' | 'approval'
+  aiInvolvement: varchar('ai_involvement', { length: 20 }).notNull().default('none'), // 'none' | 'collaboration' | 'full'
+  tags: jsonb('tags').$type<string[]>().default([]),
+  // Rating & engagement
+  ratingSum: integer('rating_sum').notNull().default(0),
+  ratingCount: integer('rating_count').notNull().default(0),
+  viewCount: integer('view_count').notNull().default(0),
+  isPromoted: boolean('is_promoted').notNull().default(false),
+  publishedAt: timestamp('published_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
 });
 
 export const lessonsRelations = relations(lessons, ({ one, many }) => ({
@@ -114,26 +134,70 @@ export const lessonsRelations = relations(lessons, ({ one, many }) => ({
     fields: [lessons.levelId],
     references: [levels.id],
   }),
+  author: one(users, {
+    fields: [lessons.authorId],
+    references: [users.id],
+  }),
+  modules: many(lessonModules),
   content: many(lessonContent),
   progress: many(userProgress),
+  edits: many(lessonContentEdits),
+  suggestions: many(lessonEditSuggestions),
+}));
+
+// ============ LESSON MODULES ============
+export const lessonModules = pgTable('lesson_modules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  lessonId: uuid('lesson_id').notNull().references(() => lessons.id, { onDelete: 'cascade' }),
+  title: varchar('title', { length: 255 }).notNull(),
+  description: text('description'),
+  orderIndex: integer('order_index').notNull().default(0),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+export const lessonModulesRelations = relations(lessonModules, ({ one, many }) => ({
+  lesson: one(lessons, {
+    fields: [lessonModules.lessonId],
+    references: [lessons.id],
+  }),
+  content: many(lessonContent),
 }));
 
 // ============ LESSON CONTENT ============
+export interface SourceReference {
+  title: string;
+  url?: string;
+  description?: string;
+}
+
 export const lessonContent = pgTable('lesson_content', {
   id: uuid('id').primaryKey().defaultRandom(),
   lessonId: uuid('lesson_id').notNull().references(() => lessons.id, { onDelete: 'cascade' }),
+  moduleId: uuid('module_id').references(() => lessonModules.id, { onDelete: 'cascade' }),
   orderIndex: integer('order_index').notNull().default(0),
   contentType: varchar('content_type', { length: 50 }).notNull(), // text, image, interactive, question
   contentData: jsonb('content_data').notNull().$type<ContentData>(),
+  authorId: uuid('author_id').references(() => users.id),
   sources: jsonb('sources').$type<SourceReference[]>().default([]),
   createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
 });
 
-export const lessonContentRelations = relations(lessonContent, ({ one }) => ({
+export const lessonContentRelations = relations(lessonContent, ({ one, many }) => ({
   lesson: one(lessons, {
     fields: [lessonContent.lessonId],
     references: [lessons.id],
   }),
+  module: one(lessonModules, {
+    fields: [lessonContent.moduleId],
+    references: [lessonModules.id],
+  }),
+  author: one(users, {
+    fields: [lessonContent.authorId],
+    references: [users.id],
+  }),
+  edits: many(lessonContentEdits),
 }));
 
 // ============ RICH CONTENT DATA TYPES ============
@@ -196,100 +260,37 @@ export const userProgressRelations = relations(userProgress, ({ one }) => ({
   }),
 }));
 
-// ============ WORKSHOP LESSONS ============
-export const workshopLessons = pgTable('workshop_lessons', {
+// ============ LESSON CONTENT EDITS (History) ============
+export const lessonContentEdits = pgTable('lesson_content_edits', {
   id: uuid('id').primaryKey().defaultRandom(),
-  authorId: uuid('author_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  title: varchar('title', { length: 255 }).notNull(),
-  description: text('description'),
-  iconUrl: text('icon_url'),
-  themeColor: varchar('theme_color', { length: 7 }).default('#FF6B35'),
-  visibility: varchar('visibility', { length: 20 }).notNull().default('private'), // 'private' | 'public'
-  status: varchar('status', { length: 20 }).notNull().default('draft'), // 'draft' | 'published'
-  editPolicy: varchar('edit_policy', { length: 20 }).notNull().default('approval'), // 'open' | 'approval'
-  aiInvolvement: varchar('ai_involvement', { length: 20 }).notNull().default('none'), // 'none' | 'collaboration' | 'full'
-  tags: jsonb('tags').$type<string[]>().default([]),
-  ratingSum: integer('rating_sum').notNull().default(0),
-  ratingCount: integer('rating_count').notNull().default(0),
-  viewCount: integer('view_count').notNull().default(0),
-  isPromoted: boolean('is_promoted').notNull().default(false),
-  publishedAt: timestamp('published_at'),
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-  updatedAt: timestamp('updated_at').notNull().defaultNow(),
-});
-
-export const workshopLessonsRelations = relations(workshopLessons, ({ one, many }) => ({
-  author: one(users, {
-    fields: [workshopLessons.authorId],
-    references: [users.id],
-  }),
-  content: many(workshopLessonContent),
-  edits: many(workshopContentEdits),
-  suggestions: many(workshopEditSuggestions),
-}));
-
-// ============ WORKSHOP LESSON CONTENT ============
-export interface SourceReference {
-  title: string;
-  url?: string;
-  description?: string;
-}
-
-export const workshopLessonContent = pgTable('workshop_lesson_content', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  workshopLessonId: uuid('workshop_lesson_id').notNull().references(() => workshopLessons.id, { onDelete: 'cascade' }),
-  orderIndex: integer('order_index').notNull().default(0),
-  contentType: varchar('content_type', { length: 50 }).notNull(),
-  contentData: jsonb('content_data').notNull().$type<ContentData>(),
-  authorId: uuid('author_id').notNull().references(() => users.id),
-  sources: jsonb('sources').$type<SourceReference[]>().default([]),
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-  updatedAt: timestamp('updated_at').notNull().defaultNow(),
-});
-
-export const workshopLessonContentRelations = relations(workshopLessonContent, ({ one, many }) => ({
-  workshopLesson: one(workshopLessons, {
-    fields: [workshopLessonContent.workshopLessonId],
-    references: [workshopLessons.id],
-  }),
-  author: one(users, {
-    fields: [workshopLessonContent.authorId],
-    references: [users.id],
-  }),
-  edits: many(workshopContentEdits),
-}));
-
-// ============ WORKSHOP CONTENT EDITS (History) ============
-export const workshopContentEdits = pgTable('workshop_content_edits', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  workshopLessonId: uuid('workshop_lesson_id').notNull().references(() => workshopLessons.id, { onDelete: 'cascade' }),
-  contentId: uuid('content_id').references(() => workshopLessonContent.id, { onDelete: 'set null' }),
+  lessonId: uuid('lesson_id').notNull().references(() => lessons.id, { onDelete: 'cascade' }),
+  contentId: uuid('content_id').references(() => lessonContent.id, { onDelete: 'set null' }),
   editorId: uuid('editor_id').notNull().references(() => users.id),
   editType: varchar('edit_type', { length: 20 }).notNull(), // 'create' | 'update' | 'reorder' | 'delete'
   previousData: jsonb('previous_data'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
-export const workshopContentEditsRelations = relations(workshopContentEdits, ({ one }) => ({
-  workshopLesson: one(workshopLessons, {
-    fields: [workshopContentEdits.workshopLessonId],
-    references: [workshopLessons.id],
+export const lessonContentEditsRelations = relations(lessonContentEdits, ({ one }) => ({
+  lesson: one(lessons, {
+    fields: [lessonContentEdits.lessonId],
+    references: [lessons.id],
   }),
-  content: one(workshopLessonContent, {
-    fields: [workshopContentEdits.contentId],
-    references: [workshopLessonContent.id],
+  content: one(lessonContent, {
+    fields: [lessonContentEdits.contentId],
+    references: [lessonContent.id],
   }),
   editor: one(users, {
-    fields: [workshopContentEdits.editorId],
+    fields: [lessonContentEdits.editorId],
     references: [users.id],
   }),
 }));
 
-// ============ WORKSHOP EDIT SUGGESTIONS ============
-export const workshopEditSuggestions = pgTable('workshop_edit_suggestions', {
+// ============ LESSON EDIT SUGGESTIONS ============
+export const lessonEditSuggestions = pgTable('lesson_edit_suggestions', {
   id: uuid('id').primaryKey().defaultRandom(),
-  workshopLessonId: uuid('workshop_lesson_id').notNull().references(() => workshopLessons.id, { onDelete: 'cascade' }),
-  contentId: uuid('content_id').references(() => workshopLessonContent.id, { onDelete: 'set null' }),
+  lessonId: uuid('lesson_id').notNull().references(() => lessons.id, { onDelete: 'cascade' }),
+  contentId: uuid('content_id').references(() => lessonContent.id, { onDelete: 'set null' }),
   suggesterId: uuid('suggester_id').notNull().references(() => users.id),
   suggestedData: jsonb('suggested_data').notNull(),
   status: varchar('status', { length: 20 }).notNull().default('pending'), // 'pending' | 'approved' | 'rejected'
@@ -298,24 +299,44 @@ export const workshopEditSuggestions = pgTable('workshop_edit_suggestions', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
-export const workshopEditSuggestionsRelations = relations(workshopEditSuggestions, ({ one }) => ({
-  workshopLesson: one(workshopLessons, {
-    fields: [workshopEditSuggestions.workshopLessonId],
-    references: [workshopLessons.id],
+export const lessonEditSuggestionsRelations = relations(lessonEditSuggestions, ({ one }) => ({
+  lesson: one(lessons, {
+    fields: [lessonEditSuggestions.lessonId],
+    references: [lessons.id],
   }),
-  content: one(workshopLessonContent, {
-    fields: [workshopEditSuggestions.contentId],
-    references: [workshopLessonContent.id],
+  content: one(lessonContent, {
+    fields: [lessonEditSuggestions.contentId],
+    references: [lessonContent.id],
   }),
   suggester: one(users, {
-    fields: [workshopEditSuggestions.suggesterId],
+    fields: [lessonEditSuggestions.suggesterId],
     references: [users.id],
     relationName: 'suggester',
   }),
   reviewer: one(users, {
-    fields: [workshopEditSuggestions.reviewerId],
+    fields: [lessonEditSuggestions.reviewerId],
     references: [users.id],
     relationName: 'reviewer',
+  }),
+}));
+
+// ============ LESSON RATINGS ============
+export const lessonRatings = pgTable('lesson_ratings', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  lessonId: uuid('lesson_id').notNull().references(() => lessons.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  rating: integer('rating').notNull(), // 1-5
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+export const lessonRatingsRelations = relations(lessonRatings, ({ one }) => ({
+  lesson: one(lessons, {
+    fields: [lessonRatings.lessonId],
+    references: [lessons.id],
+  }),
+  user: one(users, {
+    fields: [lessonRatings.userId],
+    references: [users.id],
   }),
 }));
 
@@ -326,35 +347,12 @@ export type Course = typeof courses.$inferSelect;
 export type NewCourse = typeof courses.$inferInsert;
 export type Level = typeof levels.$inferSelect;
 export type Lesson = typeof lessons.$inferSelect;
+export type NewLesson = typeof lessons.$inferInsert;
+export type LessonModule = typeof lessonModules.$inferSelect;
 export type LessonContent = typeof lessonContent.$inferSelect;
 export type UserProgress = typeof userProgress.$inferSelect;
 export type Streak = typeof streaks.$inferSelect;
 export type Category = typeof categories.$inferSelect;
-export type WorkshopLesson = typeof workshopLessons.$inferSelect;
-export type NewWorkshopLesson = typeof workshopLessons.$inferInsert;
-export type WorkshopLessonContent = typeof workshopLessonContent.$inferSelect;
-export type NewWorkshopLessonContent = typeof workshopLessonContent.$inferInsert;
-export type WorkshopContentEdit = typeof workshopContentEdits.$inferSelect;
-export type WorkshopEditSuggestion = typeof workshopEditSuggestions.$inferSelect;
-
-// ============ WORKSHOP LESSON RATINGS ============
-export const workshopLessonRatings = pgTable('workshop_lesson_ratings', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  workshopLessonId: uuid('workshop_lesson_id').notNull().references(() => workshopLessons.id, { onDelete: 'cascade' }),
-  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  rating: integer('rating').notNull(), // 1-5
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-});
-
-export const workshopLessonRatingsRelations = relations(workshopLessonRatings, ({ one }) => ({
-  workshopLesson: one(workshopLessons, {
-    fields: [workshopLessonRatings.workshopLessonId],
-    references: [workshopLessons.id],
-  }),
-  user: one(users, {
-    fields: [workshopLessonRatings.userId],
-    references: [users.id],
-  }),
-}));
-
-export type WorkshopLessonRating = typeof workshopLessonRatings.$inferSelect;
+export type LessonContentEdit = typeof lessonContentEdits.$inferSelect;
+export type LessonEditSuggestion = typeof lessonEditSuggestions.$inferSelect;
+export type LessonRating = typeof lessonRatings.$inferSelect;
