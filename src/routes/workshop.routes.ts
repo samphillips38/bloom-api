@@ -22,6 +22,13 @@ router.post('/lessons/:id/publish', workshopController.publishLesson);
 router.get('/lessons/:id/play', workshopController.playLesson);
 router.post('/lessons/:id/rate', workshopController.rateLesson);
 
+// Modules
+router.get('/lessons/:id/modules', workshopController.getModules);
+router.post('/lessons/:id/modules', workshopController.createModule);
+router.put('/lessons/:id/modules/reorder', workshopController.reorderModules);
+router.put('/modules/:mid', workshopController.updateModule);
+router.delete('/modules/:mid', workshopController.deleteModule);
+
 // Content pages
 router.post('/lessons/:id/content', workshopController.addContent);
 router.put('/lessons/:id/content/reorder', workshopController.reorderContent);
@@ -32,8 +39,10 @@ router.delete('/lessons/:id/content/:cid', workshopController.deleteContent);
 router.get('/lessons/:id/history', workshopController.getHistory);
 router.get('/lessons/:id/metadata', workshopController.getMetadata);
 
-// AI draft generation
+// AI generation
 router.post('/ai-draft', workshopController.generateAIDraft);
+router.post('/ai-plan', workshopController.generateAIPlan);
+router.post('/ai-module-content', workshopController.generateAIModuleContent);
 
 // Edit suggestions
 router.post('/lessons/:id/suggest', workshopController.submitSuggestion);

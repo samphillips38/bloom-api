@@ -5,10 +5,12 @@ import {
   levels, 
   lessons, 
   lessonContent,
+  lessonModules,
   type Category,
   type Course,
   type Level,
   type Lesson,
+  type LessonModule,
   type LessonContent,
   type SourceReference,
 } from '../db/schema';
@@ -23,7 +25,12 @@ export interface LevelWithLessons extends Level {
   lessons: Lesson[];
 }
 
+export interface LessonModuleWithContent extends LessonModule {
+  content: LessonContent[];
+}
+
 export interface LessonWithContent extends Lesson {
+  modules: LessonModuleWithContent[];
   content: LessonContent[];
 }
 
@@ -126,13 +133,27 @@ export async function getLessonWithContent(lessonId: string): Promise<LessonWith
 
   if (!lesson) return null;
 
+  // Fetch modules for this lesson
+  const modules = await db
+    .select()
+    .from(lessonModules)
+    .where(eq(lessonModules.lessonId, lessonId))
+    .orderBy(asc(lessonModules.orderIndex));
+
+  // Fetch all content for this lesson
   const content = await db
     .select()
     .from(lessonContent)
     .where(eq(lessonContent.lessonId, lessonId))
     .orderBy(asc(lessonContent.orderIndex));
 
-  return { ...lesson, content };
+  // Group content into modules
+  const modulesWithContent: LessonModuleWithContent[] = modules.map(mod => ({
+    ...mod,
+    content: content.filter(c => c.moduleId === mod.id),
+  }));
+
+  return { ...lesson, modules: modulesWithContent, content };
 }
 
 export async function getLessonsByLevel(levelId: string): Promise<Lesson[]> {
@@ -153,7 +174,7 @@ export async function getLessonContent(lessonId: string): Promise<LessonContent[
 }
 
 // ═══════════════════════════════════════════════════════
-//  Lesson Metadata (for regular course lessons)
+//  Lesson Metadata (for course lessons — uses unified schema)
 // ═══════════════════════════════════════════════════════
 
 export async function getLessonMetadata(lessonId: string): Promise<LessonMetadata | null> {
@@ -167,29 +188,38 @@ export async function getLessonMetadata(lessonId: string): Promise<LessonMetadat
   if (!lesson) return null;
 
   // Walk up to get the course (lesson → level → course)
-  const [level] = await db
-    .select()
-    .from(levels)
-    .where(eq(levels.id, lesson.levelId))
-    .limit(1);
-
   let courseName = 'Bloom Team';
-  let aiInvolvement = 'full';
+  let aiInvolvement = lesson.aiInvolvement || 'full';
   let courseCreatedAt = lesson.createdAt;
 
-  if (level) {
-    const [course] = await db
+  if (lesson.levelId) {
+    const [level] = await db
       .select()
-      .from(courses)
-      .where(eq(courses.id, level.courseId))
+      .from(levels)
+      .where(eq(levels.id, lesson.levelId))
       .limit(1);
 
-    if (course) {
-      courseName = course.creatorName || 'Bloom Team';
-      aiInvolvement = course.aiInvolvement || 'full';
-      courseCreatedAt = course.createdAt;
+    if (level) {
+      const [course] = await db
+        .select()
+        .from(courses)
+        .where(eq(courses.id, level.courseId))
+        .limit(1);
+
+      if (course) {
+        courseName = course.creatorName || 'Bloom Team';
+        aiInvolvement = course.aiInvolvement || 'full';
+        courseCreatedAt = course.createdAt;
+      }
     }
   }
+
+  // Get modules for this lesson
+  const modules = await db
+    .select()
+    .from(lessonModules)
+    .where(eq(lessonModules.lessonId, lessonId))
+    .orderBy(asc(lessonModules.orderIndex));
 
   // Get all content pages for this lesson
   const contentPages = await db
@@ -200,6 +230,7 @@ export async function getLessonMetadata(lessonId: string): Promise<LessonMetadat
 
   const pages: ContentPageMetadata[] = contentPages.map(page => ({
     contentId: page.id,
+    moduleId: page.moduleId,
     authorName: courseName,
     authorAvatarUrl: null,
     sources: (page.sources as SourceReference[]) || [],
@@ -216,6 +247,7 @@ export async function getLessonMetadata(lessonId: string): Promise<LessonMetadat
       updatedAt: courseCreatedAt,
       aiInvolvement,
     },
+    modules: modules.map(m => ({ id: m.id, title: m.title, description: m.description })),
     pages,
   };
 }
