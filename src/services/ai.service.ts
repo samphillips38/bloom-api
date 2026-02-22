@@ -200,7 +200,7 @@ Each module should have:
 - An outline describing what should be covered, key points, and suggested question topics
 
 Guidelines:
-- Aim for 2-4 modules per lesson, depending on topic complexity
+- Create the number of modules requested by the user
 - Each module should have 3-6 pages
 - Modules should build progressively on each other
 - The first module should introduce the topic
@@ -340,7 +340,7 @@ export interface GeneratedLesson {
 
 export async function generateLessonPlan(
   topic: string,
-  totalPageCount: number = 12
+  moduleCount: number = 3
 ): Promise<LessonPlan> {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY is not configured');
@@ -349,7 +349,7 @@ export async function generateLessonPlan(
   const userPrompt = `Plan a comprehensive lesson about: "${topic}"
 
 The lesson should:
-- Have approximately ${totalPageCount} total pages spread across modules
+- Have approximately ${moduleCount} modules
 - Be suitable for someone learning this topic for the first time
 - Progress from fundamentals to more advanced concepts
 - Include questions in each module to reinforce learning
@@ -461,10 +461,10 @@ Return the JSON object with a "pages" array containing exactly ${modulePlan.page
 
 export async function generateFullLesson(
   topic: string,
-  totalPageCount: number = 12
+  moduleCount: number = 3
 ): Promise<GeneratedLesson> {
   // Phase 1: Plan the lesson
-  const plan = await generateLessonPlan(topic, totalPageCount);
+  const plan = await generateLessonPlan(topic, moduleCount);
 
   // Phase 2: Generate content for each module (in parallel)
   const moduleContents = await Promise.all(

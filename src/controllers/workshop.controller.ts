@@ -330,14 +330,14 @@ export async function reviewSuggestion(req: Request, res: Response, next: NextFu
 
 export async function generateAIDraft(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { topic, pageCount } = req.body;
+    const { topic, moduleCount } = req.body;
 
     if (!topic || typeof topic !== 'string' || topic.trim().length === 0) {
       throw new AppError('topic is required', 400);
     }
 
     // Use the new two-phase generation
-    const result = await aiService.generateFullLesson(topic.trim(), pageCount || 12);
+    const result = await aiService.generateFullLesson(topic.trim(), moduleCount || 3);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
@@ -346,13 +346,13 @@ export async function generateAIDraft(req: Request, res: Response, next: NextFun
 
 export async function generateAIPlan(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { topic, pageCount } = req.body;
+    const { topic, moduleCount } = req.body;
 
     if (!topic || typeof topic !== 'string' || topic.trim().length === 0) {
       throw new AppError('topic is required', 400);
     }
 
-    const plan = await aiService.generateLessonPlan(topic.trim(), pageCount || 12);
+    const plan = await aiService.generateLessonPlan(topic.trim(), moduleCount || 3);
     res.json({ success: true, data: { plan } });
   } catch (error) {
     next(error);
