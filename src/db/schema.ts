@@ -340,6 +340,23 @@ export const lessonRatingsRelations = relations(lessonRatings, ({ one }) => ({
   }),
 }));
 
+// ============ REFRESH TOKENS ============
+export const refreshTokens = pgTable('refresh_tokens', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tokenHash: varchar('token_hash', { length: 255 }).notNull().unique(),
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  revokedAt: timestamp('revoked_at'),
+});
+
+export const refreshTokensRelations = relations(refreshTokens, ({ one }) => ({
+  user: one(users, {
+    fields: [refreshTokens.userId],
+    references: [users.id],
+  }),
+}));
+
 // ============ TYPE EXPORTS ============
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
@@ -356,3 +373,5 @@ export type Category = typeof categories.$inferSelect;
 export type LessonContentEdit = typeof lessonContentEdits.$inferSelect;
 export type LessonEditSuggestion = typeof lessonEditSuggestions.$inferSelect;
 export type LessonRating = typeof lessonRatings.$inferSelect;
+export type RefreshToken = typeof refreshTokens.$inferSelect;
+export type NewRefreshToken = typeof refreshTokens.$inferInsert;
