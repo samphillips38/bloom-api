@@ -20,7 +20,8 @@
     "db:seed-all-expanded": "ts-node src/db/seed-all-expanded.ts",
     "db:migrate-workshop": "ts-node src/db/migrate-workshop.ts",
     "db:migrate-lesson-sources": "ts-node src/db/migrate-lesson-sources.ts",
-    "db:migrate-tags": "ts-node src/db/migrate-tags.ts"
+    "db:migrate-tags": "ts-node src/db/migrate-tags.ts",
+    "db:seed-rich-content": "ts-node src/db/seed-rich-content.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
