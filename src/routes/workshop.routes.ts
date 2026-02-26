@@ -1,5 +1,15 @@
 import { Router } from 'express';
+import multer from 'multer';
 import * as workshopController from '../controllers/workshop.controller';
+
+// Multer: store PDF uploads in memory (max 20 MB)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    cb(null, file.mimetype === 'application/pdf');
+  },
+});
 
 const router = Router();
 
@@ -44,8 +54,8 @@ router.post('/ai-draft', workshopController.generateAIDraft);
 router.post('/ai-plan', workshopController.generateAIPlan);
 router.post('/ai-module-content', workshopController.generateAIModuleContent);
 
-// Async AI generation (background job)
-router.post('/ai-generate', workshopController.startAIGeneration);
+// Async AI generation (background job) — multer handles optional PDF binary
+router.post('/ai-generate', upload.single('pdf'), workshopController.startAIGeneration);
 router.get('/lessons/:id/generation-status', workshopController.getGenerationStatus);
 
 // Edit suggestions

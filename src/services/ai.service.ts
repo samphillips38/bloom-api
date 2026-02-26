@@ -485,10 +485,10 @@ export async function extractUrlContent(url: string): Promise<string> {
 }
 
 /**
- * Extract text from a base64-encoded PDF buffer.
+ * Extract text from a PDF. Accepts either a raw Buffer or a base64-encoded string.
  */
-export async function extractPdfContent(base64Data: string): Promise<string> {
-  const buffer = Buffer.from(base64Data, 'base64');
+export async function extractPdfContent(input: Buffer | string): Promise<string> {
+  const buffer = Buffer.isBuffer(input) ? input : Buffer.from(input, 'base64');
   const data = await pdfParse(buffer);
   const text = data.text.replace(/\s+/g, ' ').trim().substring(0, 20000);
 
