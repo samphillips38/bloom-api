@@ -36,7 +36,7 @@ const CONTENT_BLOCK_SCHEMA = {
   properties: {
     type: {
       type: 'string' as const,
-      enum: ['heading', 'paragraph', 'image', 'math', 'callout', 'bulletList', 'spacer', 'divider'],
+      enum: ['heading', 'paragraph', 'image', 'math', 'callout', 'bulletList', 'spacer', 'divider', 'interactive'],
     },
     // heading / paragraph / callout
     segments: {
@@ -69,8 +69,12 @@ const CONTENT_BLOCK_SCHEMA = {
       type: ['string', 'null'] as const,
       enum: ['sm', 'md', 'lg', null],
     },
+    // interactive component fields
+    componentId: { type: ['string', 'null'] as const },
+    // JSON-encoded props string — parsed at runtime into Record<string, unknown>
+    componentPropsJson: { type: ['string', 'null'] as const },
   },
-  required: ['type', 'segments', 'level', 'src', 'caption', 'latex', 'style', 'title', 'items', 'size'],
+  required: ['type', 'segments', 'level', 'src', 'caption', 'latex', 'style', 'title', 'items', 'size', 'componentId', 'componentPropsJson'],
   additionalProperties: false,
 };
 
@@ -211,44 +215,128 @@ const MODULE_SYSTEM_PROMPT = `You are an expert educational content creator for 
 
 Your output must be a JSON object with a "pages" array. Each page is either a "page" (teaching content) or a "question" (quiz).
 
+═══════════════════════════════
 PAGE format:
+═══════════════════════════════
 {
   "type": "page",
-  "blocks": [
-    { "type": "heading", "segments": [{ "text": "Title", "bold": null, "italic": null, "color": null, "definition": null }], "level": 1, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null },
-    { "type": "paragraph", "segments": [{ "text": "Normal text", "bold": null, "italic": null, "color": null, "definition": null }, { "text": "bold text", "bold": true, "italic": null, "color": null, "definition": null }], "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null },
-    { "type": "image", "segments": null, "level": null, "src": "emoji:🧠", "caption": "Optional caption", "latex": null, "style": null, "title": null, "items": null, "size": null },
-    { "type": "callout", "segments": [{ "text": "Helpful info", "bold": null, "italic": null, "color": null, "definition": null }], "level": null, "src": null, "caption": null, "latex": null, "style": "tip", "title": "Pro Tip", "items": null, "size": null },
-    { "type": "bulletList", "segments": null, "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": [[{ "text": "Item 1", "bold": null, "italic": null, "color": null, "definition": null }]], "size": null },
-    { "type": "math", "segments": null, "level": null, "src": null, "caption": "Einstein's equation", "latex": "E = mc^2", "style": null, "title": null, "items": null, "size": null },
-    { "type": "divider", "segments": null, "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null },
-    { "type": "spacer", "segments": null, "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": "md" }
-  ],
+  "blocks": [ ...blocks... ],
   "question": null, "questionSegments": null, "options": null, "correctIndex": null, "explanation": null, "explanationSegments": null
 }
 
+STANDARD BLOCK EXAMPLES (all fields required — use null for unused ones):
+{ "type": "heading",   "segments": [{ "text": "Title", "bold": null, "italic": null, "color": null, "definition": null }], "level": 2, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null }
+{ "type": "paragraph", "segments": [{ "text": "Body text. ", "bold": null, "italic": null, "color": null, "definition": null }, { "text": "Key term", "bold": true, "italic": null, "color": "blue", "definition": "What this term means" }], "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null }
+{ "type": "image",     "segments": null, "level": null, "src": "emoji:🧠", "caption": "Caption text", "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null }
+{ "type": "callout",   "segments": [{ "text": "Tip text", "bold": null, "italic": null, "color": null, "definition": null }], "level": null, "src": null, "caption": null, "latex": null, "style": "tip", "title": "Pro Tip", "items": null, "size": null, "componentId": null, "componentPropsJson": null }
+{ "type": "bulletList","segments": null, "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": [[{ "text": "Item 1", "bold": null, "italic": null, "color": null, "definition": null }], [{ "text": "Item 2", "bold": null, "italic": null, "color": null, "definition": null }]], "size": null, "componentId": null, "componentPropsJson": null }
+{ "type": "math",      "segments": null, "level": null, "src": null, "caption": "Euler's identity", "latex": "e^{i\\pi} + 1 = 0", "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null }
+{ "type": "divider",   "segments": null, "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null }
+{ "type": "spacer",    "segments": null, "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": "md", "componentId": null, "componentPropsJson": null }
+
+═══════════════════════════════
+INTERACTIVE BLOCK format:
+═══════════════════════════════
+To embed an interactive component, use type "interactive". Set componentId to the component ID and componentPropsJson to a JSON-encoded STRING of the props object.
+
+CRITICAL: componentPropsJson must be a STRING value containing valid JSON — NOT a nested object. Example:
+{ "type": "interactive", "segments": null, "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": "flashcard-deck", "componentPropsJson": "{\"title\":\"Key Terms\",\"cards\":[{\"front\":\"Photosynthesis\",\"back\":\"Process plants use to convert light into food\"}]}" }
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+COMPONENT REFERENCE:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. flashcard-deck — Flip cards to reveal definitions. Best for vocabulary, Q&A review.
+   Required props: title (string), cards (array of {front, back})
+   Example componentPropsJson: "{\"title\":\"Key Vocabulary\",\"cards\":[{\"front\":\"Term\",\"back\":\"What it means\"},{\"front\":\"Another Term\",\"back\":\"Its definition\"}]}"
+
+2. word-match — Two-column matching: tap term then its definition. Best for terminology.
+   Required props: title (string), pairs (array of {term, definition})
+   Example componentPropsJson: "{\"title\":\"Match the Terms\",\"pairs\":[{\"term\":\"Mitosis\",\"definition\":\"Cell division producing 2 identical daughter cells\"},{\"term\":\"Meiosis\",\"definition\":\"Division producing 4 genetically unique gametes\"}]}"
+
+3. memory-match — Card-flip memory game. Keep to 4–8 pairs. Best for symbols, formulas.
+   Required props: title (string), pairs (array of {term, definition})
+   Example componentPropsJson: "{\"title\":\"Symbol Memory\",\"pairs\":[{\"term\":\"∧\",\"definition\":\"AND\"},{\"term\":\"∨\",\"definition\":\"OR\"},{\"term\":\"¬\",\"definition\":\"NOT\"},{\"term\":\"→\",\"definition\":\"IMPLIES\"}]}"
+
+4. sortable-categories — Sort items into category buckets. Best for classification.
+   Required props: title, instruction, categories (array of {label, items[]})
+   Example componentPropsJson: "{\"title\":\"Classify These\",\"instruction\":\"Tap an item, then its category.\",\"categories\":[{\"label\":\"Animals\",\"items\":[\"Dog\",\"Eagle\"]},{\"label\":\"Plants\",\"items\":[\"Oak\",\"Fern\"]}]}"
+
+5. sequence-sorter — Reorder shuffled steps into correct order. Best for processes, algorithms.
+   Required props: title, instruction, items (string[], IN correct order — they get shuffled), hint (optional string)
+   Example componentPropsJson: "{\"title\":\"Steps in Order\",\"instruction\":\"Arrange from first to last.\",\"items\":[\"Collect data\",\"Analyse results\",\"Draw conclusions\",\"Publish findings\"],\"hint\":\"Think about the scientific method.\"}"
+
+6. fill-in-the-blank — Complete sentences from a word bank. Use __BLANK__ in sentence.
+   Required props: title, sentence (with __BLANK__ tokens), blanks (correct answers in order), wordBank (extra decoys)
+   Example componentPropsJson: "{\"title\":\"Complete the Sentence\",\"sentence\":\"Water boils at __BLANK__ degrees Celsius and freezes at __BLANK__ degrees.\",\"blanks\":[\"100\",\"0\"],\"wordBank\":[\"50\",\"-10\",\"37\"]}"
+
+7. poll — Vote and see results. Best for engagement, opinion checks.
+   Required props: question (string), options (string[])
+   Example componentPropsJson: "{\"question\":\"Which learning style works best for you?\",\"options\":[\"Visual diagrams\",\"Written notes\",\"Practice problems\",\"Discussion\"]}"
+
+8. bar-chart-builder — Adjustable bar chart. Best for data exploration, comparisons.
+   Required props: title, description, bars (array of {label, value, maxValue}), showValues (boolean)
+   Example componentPropsJson: "{\"title\":\"Speed Comparison\",\"description\":\"Adjust the bars to compare.\",\"bars\":[{\"label\":\"Car\",\"value\":120,\"maxValue\":300},{\"label\":\"Train\",\"value\":300,\"maxValue\":300},{\"label\":\"Plane\",\"value\":900,\"maxValue\":1000}],\"showValues\":true}"
+
+9. timeline — Expandable timeline. Best for history, biographical sequences.
+   Required props: title, events (array of {year, title, description, emoji})
+   Example componentPropsJson: "{\"title\":\"Key Events\",\"events\":[{\"year\":\"1905\",\"title\":\"Special Relativity\",\"description\":\"Einstein publishes his theory.\",\"emoji\":\"⚡\"},{\"year\":\"1915\",\"title\":\"General Relativity\",\"description\":\"Extended to include gravity.\",\"emoji\":\"🌌\"}]}"
+
+10. number-line — Slider on a number line. Omit 'answer' for open self-rating. Best for math, estimation.
+    Required props: title, question, min (number), max (number), step (number), unit (string)
+    Optional props: answer (number — if provided, checks correctness), answerTolerance (number, default 1)
+    Example (with answer): "{\"title\":\"Place the Value\",\"question\":\"Where is 3/4 on this number line?\",\"min\":0,\"max\":1,\"step\":0.05,\"unit\":\"\",\"answer\":0.75,\"answerTolerance\":0.1}"
+    Example (self-rating): "{\"title\":\"Confidence Check\",\"question\":\"How confident are you? (0 = not at all, 10 = very)\",\"min\":0,\"max\":10,\"step\":1,\"unit\":\"\"}"
+
+11. hotspot-diagram — Clickable pins on a diagram. x/y are % (0-100) from top-left. Best for anatomy, circuits.
+    Required props: title, diagramEmoji, diagramLabel, hotspots (array of {x, y, label, description, emoji})
+    Example componentPropsJson: "{\"title\":\"Cell Structure\",\"diagramEmoji\":\"🔬\",\"diagramLabel\":\"Animal Cell\",\"hotspots\":[{\"x\":50,\"y\":45,\"label\":\"Nucleus\",\"description\":\"Controls cell activity and contains DNA.\",\"emoji\":\"🔴\"},{\"x\":70,\"y\":30,\"label\":\"Mitochondria\",\"description\":\"Produces ATP — the cell's energy currency.\",\"emoji\":\"⚡\"}]}"
+
+12. concept-web — Central node with satellite concepts. 4–6 nodes ideal. Best for mind maps.
+    Required props: title, center (string), centerEmoji (string), nodes (array of {label, description, emoji})
+    Example componentPropsJson: "{\"title\":\"Types of Energy\",\"center\":\"Energy\",\"centerEmoji\":\"⚡\",\"nodes\":[{\"label\":\"Kinetic\",\"description\":\"Energy of motion — a moving car, running water.\",\"emoji\":\"🚗\"},{\"label\":\"Potential\",\"description\":\"Stored energy — a raised weight, a compressed spring.\",\"emoji\":\"⬆️\"},{\"label\":\"Thermal\",\"description\":\"Heat energy from particle vibration.\",\"emoji\":\"🔥\"}]}"
+
+13. sine-wave-explorer — Interactive sine wave with sliders. Best for trigonometry, waves.
+    Optional props: title (string), showAmplitude (bool), showFrequency (bool), showPhase (bool)
+    Example componentPropsJson: "{\"title\":\"Explore the Sine Wave\",\"showAmplitude\":true,\"showFrequency\":true,\"showPhase\":false}"
+
+14. truth-table-builder — Fill-in truth table for a logical operator. Best for logic, CS.
+    Required props: title (string), operator ("AND" | "OR" | "NOT" | "IMPLIES")
+    Example componentPropsJson: "{\"title\":\"OR Truth Table\",\"operator\":\"OR\"}"
+
+15. venn-diagram — Two-circle Venn diagram with clickable regions. Best for set theory, comparisons.
+    Required props: title, leftLabel, rightLabel, leftItems (string[]), bothItems (string[]), rightItems (string[])
+    Example componentPropsJson: "{\"title\":\"Vertebrates vs Warm-blooded\",\"leftLabel\":\"Vertebrates only\",\"rightLabel\":\"Warm-blooded only\",\"leftItems\":[\"Fish\",\"Reptiles\"],\"bothItems\":[\"Birds\",\"Mammals\"],\"rightItems\":[]}"
+
+═══════════════════════════════
 QUESTION format:
+═══════════════════════════════
 {
   "type": "question",
   "blocks": null,
   "question": "What is X?",
-  "questionSegments": [{ "text": "What is ", "bold": null, "italic": null, "color": null, "definition": null }, { "text": "X", "bold": true, "italic": null, "color": null, "definition": null }, { "text": "?", "bold": null, "italic": null, "color": null, "definition": null }],
+  "questionSegments": [{ "text": "What is ", "bold": null, "italic": null, "color": null, "definition": null }, { "text": "X", "bold": true, "italic": null, "color": null, "definition": null }],
   "options": ["Option A", "Option B", "Option C", "Option D"],
   "correctIndex": 0,
   "explanation": "Because...",
   "explanationSegments": [{ "text": "Because...", "bold": null, "italic": null, "color": null, "definition": null }]
 }
 
-Guidelines:
-- Use rich formatting: bold for key terms, colors for emphasis, callouts for tips
-- Include at least 1 question per module
+═══════════════════════════════
+GUIDELINES:
+═══════════════════════════════
+- Use interactive components liberally — aim for at least 1-2 per module to make lessons engaging
+- Place interactive blocks on their OWN page (or with minimal surrounding text) so they have visual space
+- Use rich text formatting: bold for key terms, colors for emphasis, definition tooltips
+- Include at least 1 multiple-choice question per module
 - Use emojis for images (format: "emoji:🎯")
-- Use LaTeX for any math equations
-- Add definition terms where appropriate using the "definition" property on text segments
+- Use LaTeX for math equations
 - Keep paragraphs concise and mobile-friendly
-- Colors available: "accent" (orange), "secondary" (gray), "success" (green), "warning" (amber), "blue", "purple"
+- Colors: "accent" (orange), "secondary" (gray), "success" (green), "warning" (amber), "blue", "purple"
 - Callout styles: "info", "tip", "warning", "example"
-- For unused/optional fields, always provide null (never omit a field)`;
+- For ALL unused/optional fields on standard blocks, always write null (never omit a field)
+- For interactive blocks, componentPropsJson must be a valid JSON string (double-quote all keys and strings)
+- Choose interactive components that match the content: use concept-web for overviews, timeline for history, memory-match for symbols, fill-in-the-blank for exercises, etc.`;
 
 // ═══════════════════════════════════════════════════════
 //  Sanitize helpers — strip nulls from AI output
@@ -277,6 +365,24 @@ function cleanBlock(block: any): ContentBlock {
   if (base.items && Array.isArray(base.items)) {
     base.items = base.items.map((item: any[]) => cleanSegments(item) || []);
   }
+
+  // Handle interactive blocks: parse componentPropsJson → props
+  if (base.type === 'interactive' && base.componentId) {
+    let props: Record<string, unknown> = {};
+    if (base.componentPropsJson) {
+      try {
+        props = JSON.parse(base.componentPropsJson);
+      } catch {
+        // malformed JSON — use empty props
+      }
+    }
+    delete base.componentPropsJson;
+    return { type: 'interactive', componentId: base.componentId, props } as ContentBlock;
+  }
+
+  // Remove interactive-only fields from non-interactive blocks
+  delete base.componentId;
+  delete base.componentPropsJson;
 
   return base as ContentBlock;
 }
@@ -500,14 +606,14 @@ PAGE format:
 {
   "type": "page",
   "blocks": [
-    { "type": "heading", "segments": [{ "text": "Title", "bold": null, "italic": null, "color": null, "definition": null }], "level": 1, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null },
-    { "type": "paragraph", "segments": [{ "text": "Normal text", "bold": null, "italic": null, "color": null, "definition": null }, { "text": "bold text", "bold": true, "italic": null, "color": null, "definition": null }], "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null },
-    { "type": "image", "segments": null, "level": null, "src": "emoji:🧠", "caption": "Optional caption", "latex": null, "style": null, "title": null, "items": null, "size": null },
-    { "type": "callout", "segments": [{ "text": "Helpful info", "bold": null, "italic": null, "color": null, "definition": null }], "level": null, "src": null, "caption": null, "latex": null, "style": "tip", "title": "Pro Tip", "items": null, "size": null },
-    { "type": "bulletList", "segments": null, "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": [[{ "text": "Item 1", "bold": null, "italic": null, "color": null, "definition": null }]], "size": null },
-    { "type": "math", "segments": null, "level": null, "src": null, "caption": "Einstein's equation", "latex": "E = mc^2", "style": null, "title": null, "items": null, "size": null },
-    { "type": "divider", "segments": null, "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null },
-    { "type": "spacer", "segments": null, "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": "md" }
+    { "type": "heading", "segments": [{ "text": "Title", "bold": null, "italic": null, "color": null, "definition": null }], "level": 1, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null },
+    { "type": "paragraph", "segments": [{ "text": "Normal text", "bold": null, "italic": null, "color": null, "definition": null }, { "text": "bold text", "bold": true, "italic": null, "color": null, "definition": null }], "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null },
+    { "type": "image", "segments": null, "level": null, "src": "emoji:🧠", "caption": "Optional caption", "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null },
+    { "type": "callout", "segments": [{ "text": "Helpful info", "bold": null, "italic": null, "color": null, "definition": null }], "level": null, "src": null, "caption": null, "latex": null, "style": "tip", "title": "Pro Tip", "items": null, "size": null, "componentId": null, "componentPropsJson": null },
+    { "type": "bulletList", "segments": null, "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": [[{ "text": "Item 1", "bold": null, "italic": null, "color": null, "definition": null }]], "size": null, "componentId": null, "componentPropsJson": null },
+    { "type": "math", "segments": null, "level": null, "src": null, "caption": "Einstein's equation", "latex": "E = mc^2", "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null },
+    { "type": "divider", "segments": null, "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null },
+    { "type": "spacer", "segments": null, "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": "md", "componentId": null, "componentPropsJson": null }
   ],
   "question": null, "questionSegments": null, "options": null, "correctIndex": null, "explanation": null, "explanationSegments": null
 }
