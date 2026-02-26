@@ -340,6 +340,31 @@ export const lessonRatingsRelations = relations(lessonRatings, ({ one }) => ({
   }),
 }));
 
+// ============ USER LIBRARY ============
+export const userLibrary = pgTable('user_library', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // One of these will be set (not both)
+  lessonId: uuid('lesson_id').references(() => lessons.id, { onDelete: 'cascade' }),
+  courseId: uuid('course_id').references(() => courses.id, { onDelete: 'cascade' }),
+  savedAt: timestamp('saved_at').notNull().defaultNow(),
+});
+
+export const userLibraryRelations = relations(userLibrary, ({ one }) => ({
+  user: one(users, {
+    fields: [userLibrary.userId],
+    references: [users.id],
+  }),
+  lesson: one(lessons, {
+    fields: [userLibrary.lessonId],
+    references: [lessons.id],
+  }),
+  course: one(courses, {
+    fields: [userLibrary.courseId],
+    references: [courses.id],
+  }),
+}));
+
 // ============ REFRESH TOKENS ============
 export const refreshTokens = pgTable('refresh_tokens', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -358,6 +383,8 @@ export const refreshTokensRelations = relations(refreshTokens, ({ one }) => ({
 }));
 
 // ============ TYPE EXPORTS ============
+export type UserLibrary = typeof userLibrary.$inferSelect;
+export type NewUserLibrary = typeof userLibrary.$inferInsert;
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Course = typeof courses.$inferSelect;

@@ -12,6 +12,7 @@ import authRoutes from './routes/auth.routes';
 import coursesRoutes from './routes/courses.routes';
 import progressRoutes from './routes/progress.routes';
 import workshopRoutes from './routes/workshop.routes';
+import libraryRoutes from './routes/library.routes';
 import { authMiddleware } from './middleware/auth.middleware';
 
 const app = express();
@@ -54,6 +55,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/courses', coursesRoutes);
 app.use('/api/progress', progressRoutes);
 app.use('/api/workshop', authMiddleware, workshopRoutes);
+app.use('/api/library', authMiddleware, libraryRoutes);
 
 // Error handling
 app.use(notFoundHandler);
@@ -156,6 +158,22 @@ async function runAutoMigrations() {
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
         UNIQUE(lesson_id, user_id)
       )
+    `);
+
+    // ── User library table ──
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS user_library (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        lesson_id UUID REFERENCES lessons(id) ON DELETE CASCADE,
+        course_id UUID REFERENCES courses(id) ON DELETE CASCADE,
+        saved_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, lesson_id),
+        UNIQUE (user_id, course_id)
+      )
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_user_library_user ON user_library(user_id)
     `);
 
     // ── Refresh tokens table ──
