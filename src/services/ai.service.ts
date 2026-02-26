@@ -1,5 +1,14 @@
 import OpenAI from 'openai';
+import pdfParse from 'pdf-parse';
 import type { ContentData, ContentBlock, TextSegment } from '../db/schema';
+import { db } from '../config/database';
+import {
+  lessons,
+  lessonModules,
+  lessonContent,
+  lessonGenerationJobs,
+} from '../db/schema';
+import { eq } from 'drizzle-orm';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || '',
@@ -441,16 +450,71 @@ export interface GeneratedLesson {
 }
 
 // ═══════════════════════════════════════════════════════
+//  Source Content Extraction
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Extract readable text from a URL (server-side fetch to avoid CORS issues).
+ */
+export async function extractUrlContent(url: string): Promise<string> {
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Bloom Educational Platform - content indexing)' },
+    signal: AbortSignal.timeout(15000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch URL (HTTP ${response.status})`);
+  }
+
+  const html = await response.text();
+
+  // Strip scripts, styles, then all tags — leave whitespace-collapsed text
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .substring(0, 20000); // cap at 20 000 chars to keep prompt manageable
+
+  if (text.length < 100) {
+    throw new Error('Could not extract meaningful text from the URL');
+  }
+
+  return text;
+}
+
+/**
+ * Extract text from a base64-encoded PDF buffer.
+ */
+export async function extractPdfContent(base64Data: string): Promise<string> {
+  const buffer = Buffer.from(base64Data, 'base64');
+  const data = await pdfParse(buffer);
+  const text = data.text.replace(/\s+/g, ' ').trim().substring(0, 20000);
+
+  if (text.length < 100) {
+    throw new Error('Could not extract meaningful text from the PDF');
+  }
+
+  return text;
+}
+
+// ═══════════════════════════════════════════════════════
 //  Phase 1: Plan the lesson structure
 // ═══════════════════════════════════════════════════════
 
 export async function generateLessonPlan(
   topic: string,
-  moduleCount: number = 3
+  moduleCount: number = 3,
+  sourceContent?: string,
 ): Promise<LessonPlan> {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY is not configured');
   }
+
+  const sourceSection = sourceContent
+    ? `\n\nBASE THE LESSON ON THE FOLLOWING SOURCE MATERIAL (summarise, adapt, and structure it — do not copy verbatim):\n---\n${sourceContent}\n---`
+    : '';
 
   const userPrompt = `Plan a comprehensive lesson about: "${topic}"
 
@@ -458,7 +522,7 @@ The lesson should:
 - Have approximately ${moduleCount} modules
 - Be suitable for someone learning this topic for the first time
 - Progress from fundamentals to more advanced concepts
-- Include questions in each module to reinforce learning
+- Include questions in each module to reinforce learning${sourceSection}
 
 Return the lesson plan with title, description, tags, and module outlines.`;
 
@@ -499,7 +563,8 @@ export async function generateModuleContent(
   lessonDescription: string,
   modulePlan: ModulePlan,
   moduleIndex: number,
-  totalModules: number
+  totalModules: number,
+  sourceContent?: string,
 ): Promise<ContentData[]> {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY is not configured');
@@ -517,6 +582,10 @@ export async function generateModuleContent(
     contextInstructions = `This is module ${moduleIndex + 1} of ${totalModules}. It builds on previous modules. Start with a brief transition that connects to what was learned before.`;
   }
 
+  const sourceSection = sourceContent
+    ? `\n\nUse the following source material to inform this module's content:\n---\n${sourceContent.substring(0, 8000)}\n---`
+    : '';
+
   const userPrompt = `Create content for the following module within a lesson about "${lessonTitle}".
 
 Lesson description: ${lessonDescription}
@@ -528,7 +597,7 @@ Target page count: ${modulePlan.pageCount}
 Outline:
 ${modulePlan.outline}
 
-${contextInstructions}
+${contextInstructions}${sourceSection}
 
 Return the JSON object with a "pages" array containing exactly ${modulePlan.pageCount} pages.`;
 
@@ -559,6 +628,105 @@ Return the JSON object with a "pages" array containing exactly ${modulePlan.page
   }
 
   return cleanPages(pages);
+}
+
+// ═══════════════════════════════════════════════════════
+//  Background (async) generation — saves directly to DB
+// ═══════════════════════════════════════════════════════
+
+export interface BackgroundGenerationParams {
+  lessonId: string;
+  userId: string;
+  jobId: string;
+  topic: string;
+  moduleCount?: number;
+  sourceContent?: string;
+  sourceType?: 'topic' | 'url' | 'pdf';
+}
+
+/**
+ * Run a full two-phase lesson generation in the background,
+ * writing results directly to the database and updating the job record.
+ * Call this with `void` — it is designed to be fire-and-forget.
+ */
+export async function startBackgroundGeneration(params: BackgroundGenerationParams): Promise<void> {
+  const { lessonId, userId, jobId, topic, moduleCount = 3, sourceContent } = params;
+
+  const updateJob = (fields: Partial<typeof lessonGenerationJobs.$inferInsert>) =>
+    db.update(lessonGenerationJobs)
+      .set({ ...fields, updatedAt: new Date() })
+      .where(eq(lessonGenerationJobs.id, jobId));
+
+  try {
+    // ── Phase 1: Planning ──────────────────────────────
+    await updateJob({ status: 'planning' });
+
+    const plan = await generateLessonPlan(topic, moduleCount, sourceContent);
+
+    // Update the lesson stub with AI-generated title/description/tags
+    await db.update(lessons)
+      .set({
+        title: plan.title,
+        description: plan.description,
+        tags: plan.tags,
+        aiInvolvement: 'full',
+        updatedAt: new Date(),
+      })
+      .where(eq(lessons.id, lessonId));
+
+    // Advance to generating phase
+    await updateJob({ status: 'generating', totalModules: plan.modules.length });
+
+    // ── Phase 2: Generate each module ─────────────────
+    for (let i = 0; i < plan.modules.length; i++) {
+      const modulePlan = plan.modules[i];
+
+      await updateJob({ currentModuleTitle: modulePlan.title });
+
+      // Create module record
+      const [moduleRecord] = await db.insert(lessonModules).values({
+        lessonId,
+        title: modulePlan.title,
+        description: modulePlan.description,
+        orderIndex: i,
+      }).returning();
+
+      // Generate module pages
+      const pages = await generateModuleContent(
+        plan.title,
+        plan.description,
+        modulePlan,
+        i,
+        plan.modules.length,
+        sourceContent,
+      );
+
+      // Save pages to DB
+      if (pages.length > 0) {
+        await db.insert(lessonContent).values(
+          pages.map((pageData, pIdx) => ({
+            lessonId,
+            moduleId: moduleRecord.id,
+            orderIndex: pIdx,
+            contentType: pageData.type === 'question' ? 'question' : 'page',
+            contentData: pageData,
+            authorId: userId,
+          })),
+        );
+      }
+
+      await updateJob({ completedModules: i + 1 });
+    }
+
+    // ── Done ──────────────────────────────────────────
+    await updateJob({ status: 'completed', currentModuleTitle: null });
+  } catch (error: any) {
+    console.error('[BackgroundGeneration] Failed for lesson', lessonId, error);
+    await updateJob({
+      status: 'failed',
+      error: error?.message ?? 'Unknown error during generation',
+    }).catch(() => {/* ignore secondary failure */});
+  }
 }
 
 // ═══════════════════════════════════════════════════════

@@ -44,6 +44,10 @@ router.post('/ai-draft', workshopController.generateAIDraft);
 router.post('/ai-plan', workshopController.generateAIPlan);
 router.post('/ai-module-content', workshopController.generateAIModuleContent);
 
+// Async AI generation (background job)
+router.post('/ai-generate', workshopController.startAIGeneration);
+router.get('/lessons/:id/generation-status', workshopController.getGenerationStatus);
+
 // Edit suggestions
 router.post('/lessons/:id/suggest', workshopController.submitSuggestion);
 router.get('/lessons/:id/suggestions', workshopController.getSuggestions);

@@ -382,6 +382,32 @@ export const refreshTokensRelations = relations(refreshTokens, ({ one }) => ({
   }),
 }));
 
+// ============ LESSON GENERATION JOBS ============
+export const lessonGenerationJobs = pgTable('lesson_generation_jobs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  lessonId: uuid('lesson_id').notNull().references(() => lessons.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  status: varchar('status', { length: 20 }).notNull().default('pending'), // pending | planning | generating | completed | failed
+  totalModules: integer('total_modules').notNull().default(0),
+  completedModules: integer('completed_modules').notNull().default(0),
+  currentModuleTitle: varchar('current_module_title', { length: 255 }),
+  sourceType: varchar('source_type', { length: 20 }).notNull().default('topic'), // topic | url | pdf
+  error: text('error'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+export const lessonGenerationJobsRelations = relations(lessonGenerationJobs, ({ one }) => ({
+  lesson: one(lessons, {
+    fields: [lessonGenerationJobs.lessonId],
+    references: [lessons.id],
+  }),
+  user: one(users, {
+    fields: [lessonGenerationJobs.userId],
+    references: [users.id],
+  }),
+}));
+
 // ============ TYPE EXPORTS ============
 export type UserLibrary = typeof userLibrary.$inferSelect;
 export type NewUserLibrary = typeof userLibrary.$inferInsert;
@@ -402,3 +428,5 @@ export type LessonEditSuggestion = typeof lessonEditSuggestions.$inferSelect;
 export type LessonRating = typeof lessonRatings.$inferSelect;
 export type RefreshToken = typeof refreshTokens.$inferSelect;
 export type NewRefreshToken = typeof refreshTokens.$inferInsert;
+export type LessonGenerationJob = typeof lessonGenerationJobs.$inferSelect;
+export type NewLessonGenerationJob = typeof lessonGenerationJobs.$inferInsert;
