@@ -236,7 +236,7 @@ PAGE format:
 STANDARD BLOCK EXAMPLES (all fields required — use null for unused ones):
 { "type": "heading",   "segments": [{ "text": "Title", "bold": null, "italic": null, "color": null, "definition": null }], "level": 2, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null }
 { "type": "paragraph", "segments": [{ "text": "Body text. ", "bold": null, "italic": null, "color": null, "definition": null }, { "text": "Key term", "bold": true, "italic": null, "color": "blue", "definition": "What this term means" }], "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null }
-{ "type": "image",     "segments": null, "level": null, "src": "emoji:🧠", "caption": "Caption text", "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null }
+{ "type": "image",     "segments": null, "level": null, "src": "wikimedia:photosynthesis diagram", "caption": "Caption text", "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null }
 { "type": "callout",   "segments": [{ "text": "Tip text", "bold": null, "italic": null, "color": null, "definition": null }], "level": null, "src": null, "caption": null, "latex": null, "style": "tip", "title": "Pro Tip", "items": null, "size": null, "componentId": null, "componentPropsJson": null }
 { "type": "bulletList","segments": null, "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": [[{ "text": "Item 1", "bold": null, "italic": null, "color": null, "definition": null }], [{ "text": "Item 2", "bold": null, "italic": null, "color": null, "definition": null }]], "size": null, "componentId": null, "componentPropsJson": null }
 { "type": "math",      "segments": null, "level": null, "src": null, "caption": "Euler's identity", "latex": "e^{i\\pi} + 1 = 0", "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null }
@@ -338,7 +338,7 @@ GUIDELINES:
 - Place interactive blocks on their OWN page (or with minimal surrounding text) so they have visual space
 - Use rich text formatting: bold for key terms, colors for emphasis, definition tooltips
 - Include at least 1 multiple-choice question per module
-- Use emojis for images (format: "emoji:🎯")
+- For image blocks, use format "wikimedia:<search term>" to source a real diagram from Wikimedia Commons (e.g. "wikimedia:photosynthesis light reaction", "wikimedia:neuron anatomy", "wikimedia:mitosis cell division stages"). Prefer real diagrams over emoji placeholders. Only use "emoji:<emoji>" when the topic is truly abstract and no real diagram would apply.
 - Use LaTeX for math equations
 - Keep paragraphs concise and mobile-friendly
 - Colors: "accent" (orange), "secondary" (gray), "success" (green), "warning" (amber), "blue", "purple"
@@ -346,6 +346,105 @@ GUIDELINES:
 - For ALL unused/optional fields on standard blocks, always write null (never omit a field)
 - For interactive blocks, componentPropsJson must be a valid JSON string (double-quote all keys and strings)
 - Choose interactive components that match the content: use concept-web for overviews, timeline for history, memory-match for symbols, fill-in-the-blank for exercises, etc.`;
+
+// ═══════════════════════════════════════════════════════
+//  Wikimedia Commons image resolution
+// ═══════════════════════════════════════════════════════
+
+const COMMONS_API = 'https://commons.wikimedia.org/w/api.php';
+
+/**
+ * Given a search term, returns the direct URL of the first matching image on
+ * Wikimedia Commons, or null if nothing is found / the request fails.
+ */
+async function resolveWikimediaUrl(term: string): Promise<string | null> {
+  try {
+    // Step 1: text-search in File: namespace
+    const searchParams = new URLSearchParams({
+      action: 'query',
+      list: 'search',
+      srnamespace: '6',
+      srsearch: term,
+      srlimit: '5',
+      format: 'json',
+      origin: '*',
+    });
+    const searchRes = await fetch(`${COMMONS_API}?${searchParams}`, {
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!searchRes.ok) return null;
+    const searchData: any = await searchRes.json();
+    const hits: Array<{ title: string }> = searchData?.query?.search ?? [];
+    if (hits.length === 0) return null;
+
+    // Step 2: resolve full image URL for the first result
+    const infoParams = new URLSearchParams({
+      action: 'query',
+      titles: hits[0].title,
+      prop: 'imageinfo',
+      iiprop: 'url',
+      format: 'json',
+      origin: '*',
+    });
+    const infoRes = await fetch(`${COMMONS_API}?${infoParams}`, {
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!infoRes.ok) return null;
+    const infoData: any = await infoRes.json();
+    const pages = Object.values(infoData?.query?.pages ?? {}) as Array<{
+      imageinfo?: Array<{ url: string }>;
+    }>;
+    return pages[0]?.imageinfo?.[0]?.url ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Post-processes AI-generated pages: finds every image block with
+ * src="wikimedia:<term>" and replaces it with a real Wikimedia Commons URL.
+ * Falls back to "emoji:🖼️" if the search returns no result.
+ * Runs all resolutions in parallel for speed.
+ */
+async function resolveWikimediaImages(pages: ContentData[]): Promise<ContentData[]> {
+  // Collect unique search terms
+  const terms = new Set<string>();
+  for (const page of pages) {
+    if (page.type === 'page') {
+      for (const block of page.blocks) {
+        if (block.type === 'image' && block.src.startsWith('wikimedia:')) {
+          terms.add(block.src.slice('wikimedia:'.length).trim());
+        }
+      }
+    }
+  }
+
+  if (terms.size === 0) return pages;
+
+  // Resolve all unique terms in parallel
+  const resolved = new Map<string, string>();
+  await Promise.all(
+    Array.from(terms).map(async (term) => {
+      const url = await resolveWikimediaUrl(term);
+      resolved.set(term, url ?? 'emoji:🖼️');
+    })
+  );
+
+  // Replace src values
+  return pages.map((page): ContentData => {
+    if (page.type !== 'page') return page;
+    return {
+      ...page,
+      blocks: page.blocks.map((block): typeof block => {
+        if (block.type === 'image' && block.src.startsWith('wikimedia:')) {
+          const term = block.src.slice('wikimedia:'.length).trim();
+          return { ...block, src: resolved.get(term) ?? 'emoji:🖼️' };
+        }
+        return block;
+      }),
+    };
+  });
+}
 
 // ═══════════════════════════════════════════════════════
 //  Sanitize helpers — strip nulls from AI output
@@ -627,7 +726,7 @@ Return the JSON object with a "pages" array containing exactly ${modulePlan.page
     throw new Error(`AI returned empty module for "${modulePlan.title}"`);
   }
 
-  return cleanPages(pages);
+  return await resolveWikimediaImages(cleanPages(pages));
 }
 
 // ═══════════════════════════════════════════════════════
@@ -776,7 +875,7 @@ PAGE format:
   "blocks": [
     { "type": "heading", "segments": [{ "text": "Title", "bold": null, "italic": null, "color": null, "definition": null }], "level": 1, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null },
     { "type": "paragraph", "segments": [{ "text": "Normal text", "bold": null, "italic": null, "color": null, "definition": null }, { "text": "bold text", "bold": true, "italic": null, "color": null, "definition": null }], "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null },
-    { "type": "image", "segments": null, "level": null, "src": "emoji:🧠", "caption": "Optional caption", "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null },
+    { "type": "image", "segments": null, "level": null, "src": "wikimedia:brain anatomy diagram", "caption": "Optional caption", "latex": null, "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null },
     { "type": "callout", "segments": [{ "text": "Helpful info", "bold": null, "italic": null, "color": null, "definition": null }], "level": null, "src": null, "caption": null, "latex": null, "style": "tip", "title": "Pro Tip", "items": null, "size": null, "componentId": null, "componentPropsJson": null },
     { "type": "bulletList", "segments": null, "level": null, "src": null, "caption": null, "latex": null, "style": null, "title": null, "items": [[{ "text": "Item 1", "bold": null, "italic": null, "color": null, "definition": null }]], "size": null, "componentId": null, "componentPropsJson": null },
     { "type": "math", "segments": null, "level": null, "src": null, "caption": "Einstein's equation", "latex": "E = mc^2", "style": null, "title": null, "items": null, "size": null, "componentId": null, "componentPropsJson": null },
@@ -803,7 +902,7 @@ Guidelines:
 - Alternate between teaching pages and questions
 - Use rich formatting: bold for key terms, colors for emphasis, callouts for tips
 - Include at least 1-2 questions per 3-4 teaching pages
-- Use emojis for images (format: "emoji:🎯")
+- For image blocks, use format "wikimedia:<search term>" to source a real diagram from Wikimedia Commons (e.g. "wikimedia:photosynthesis diagram", "wikimedia:human heart anatomy"). Only use "emoji:<emoji>" when no real diagram would apply.
 - Use LaTeX for any math equations
 - Add definition terms where appropriate using the "definition" property on text segments
 - Keep paragraphs concise and mobile-friendly
@@ -869,5 +968,5 @@ Return the JSON object with a "pages" array.`;
     ? parsed.tags.map((t: string) => t.toLowerCase().trim()).filter(Boolean)
     : [];
 
-  return { pages: cleanPages(pages), tags };
+  return { pages: await resolveWikimediaImages(cleanPages(pages)), tags };
 }
