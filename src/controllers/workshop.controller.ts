@@ -559,19 +559,21 @@ export async function startAIGeneration(req: Request, res: Response, next: NextF
 
     const effectiveSourceType = sourceType || 'topic';
 
-    // Extract source content from URL server-side if needed
+    // Extract source content based on source type
     let resolvedSourceContent: string | undefined = sourceContent;
     if (effectiveSourceType === 'url' && typeof sourceContent === 'string' && sourceContent.startsWith('http')) {
-      // sourceContent is actually the URL — extract its text on the server
+      // sourceContent is the URL — extract its text server-side
       try {
         resolvedSourceContent = await aiService.extractUrlContent(sourceContent);
       } catch (err: any) {
         throw new AppError(`Could not read URL: ${err.message}`, 400);
       }
-    } else if (effectiveSourceType === 'pdf' && typeof sourceContent === 'string') {
-      // sourceContent is base64-encoded PDF data
+    } else if (effectiveSourceType === 'pdf') {
+      // Prefer binary upload via multer; fall back to base64 string for backward compat
+      const pdfInput: Buffer | string | undefined = (req as any).file?.buffer ?? sourceContent;
+      if (!pdfInput) throw new AppError('No PDF data received', 400);
       try {
-        resolvedSourceContent = await aiService.extractPdfContent(sourceContent);
+        resolvedSourceContent = await aiService.extractPdfContent(pdfInput);
       } catch (err: any) {
         throw new AppError(`Could not read PDF: ${err.message}`, 400);
       }
