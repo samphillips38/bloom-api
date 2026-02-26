@@ -17,6 +17,10 @@ import { authMiddleware } from './middleware/auth.middleware';
 
 const app = express();
 
+// Trust the first proxy hop (Railway / any reverse-proxy in production)
+// Required so express-rate-limit can read X-Forwarded-For correctly
+app.set('trust proxy', 1);
+
 // Security middleware
 app.use(helmet());
 
@@ -158,6 +162,32 @@ async function runAutoMigrations() {
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
         UNIQUE(lesson_id, user_id)
       )
+    `);
+
+    // ── AI generation jobs table ──
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS lesson_generation_jobs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        lesson_id UUID NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id),
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        total_modules INTEGER NOT NULL DEFAULT 0,
+        completed_modules INTEGER NOT NULL DEFAULT 0,
+        current_module_title VARCHAR(255),
+        source_type VARCHAR(20) NOT NULL DEFAULT 'topic',
+        error TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_gen_jobs_lesson ON lesson_generation_jobs(lesson_id)
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_gen_jobs_user ON lesson_generation_jobs(user_id)
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_gen_jobs_status ON lesson_generation_jobs(status)
     `);
 
     // ── User library table ──

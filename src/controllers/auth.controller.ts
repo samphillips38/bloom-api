@@ -57,7 +57,9 @@ function setRefreshCookie(res: Response, token: string) {
 }
 
 function clearRefreshCookie(res: Response) {
-  res.clearCookie('bloom_refresh', REFRESH_COOKIE_OPTIONS);
+  // Omit maxAge — clearCookie ignores it and Express v4 warns when it's present
+  const { maxAge: _maxAge, ...clearOptions } = REFRESH_COOKIE_OPTIONS;
+  res.clearCookie('bloom_refresh', clearOptions);
 }
 
 // ── Email Registration ──
