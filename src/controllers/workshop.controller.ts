@@ -2,6 +2,9 @@ import { Request, Response, NextFunction } from 'express';
 import * as workshopService from '../services/workshop.service';
 import * as aiService from '../services/ai.service';
 import { AppError } from '../middleware/error.middleware';
+import { db } from '../config/database';
+import { lessonGenerationJobs, lessons } from '../db/schema';
+import { eq, and, desc } from 'drizzle-orm';
 
 // ═══════════════════════════════════════════════════════
 //  Lessons CRUD (user-created)
@@ -527,6 +530,121 @@ export async function getModules(req: Request, res: Response, next: NextFunction
     const { id } = req.params;
     const modules = await workshopService.getLessonModules(id);
     res.json({ success: true, data: { modules } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  Async AI Generation (background job)
+// ═══════════════════════════════════════════════════════
+
+/**
+ * POST /workshop/ai-generate
+ * Starts a background AI generation job and returns immediately.
+ * Body: { topic?, moduleCount?, sourceType?, sourceContent?, lessonId? }
+ *   - topic: free-text description of what to teach
+ *   - sourceType: 'topic' | 'url' | 'pdf'
+ *   - sourceContent: extracted text from URL/PDF (sent by client)
+ *   - lessonId: optional existing lesson to generate into
+ */
+export async function startAIGeneration(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { topic, moduleCount, sourceType, sourceContent, lessonId: existingLessonId } = req.body;
+    const userId = req.user!.id;
+
+    if (!topic || typeof topic !== 'string' || topic.trim().length === 0) {
+      throw new AppError('topic is required', 400);
+    }
+
+    const effectiveSourceType = sourceType || 'topic';
+
+    // Extract source content from URL server-side if needed
+    let resolvedSourceContent: string | undefined = sourceContent;
+    if (effectiveSourceType === 'url' && typeof sourceContent === 'string' && sourceContent.startsWith('http')) {
+      // sourceContent is actually the URL — extract its text on the server
+      try {
+        resolvedSourceContent = await aiService.extractUrlContent(sourceContent);
+      } catch (err: any) {
+        throw new AppError(`Could not read URL: ${err.message}`, 400);
+      }
+    } else if (effectiveSourceType === 'pdf' && typeof sourceContent === 'string') {
+      // sourceContent is base64-encoded PDF data
+      try {
+        resolvedSourceContent = await aiService.extractPdfContent(sourceContent);
+      } catch (err: any) {
+        throw new AppError(`Could not read PDF: ${err.message}`, 400);
+      }
+    }
+
+    // Create or reuse lesson stub
+    let lessonId = existingLessonId as string | undefined;
+    if (!lessonId) {
+      const lesson = await workshopService.createLesson({
+        authorId: userId,
+        title: topic.trim().substring(0, 100),
+        aiInvolvement: 'full',
+        visibility: 'private',
+        editPolicy: 'approval',
+        tags: [],
+      });
+      lessonId = lesson.id;
+    }
+
+    // Create job record
+    const [job] = await db.insert(lessonGenerationJobs).values({
+      lessonId,
+      userId,
+      status: 'pending',
+      sourceType: effectiveSourceType,
+    }).returning();
+
+    // Fire and forget — background generation
+    void aiService.startBackgroundGeneration({
+      lessonId,
+      userId,
+      jobId: job.id,
+      topic: topic.trim(),
+      moduleCount: moduleCount || 3,
+      sourceContent: resolvedSourceContent,
+      sourceType: effectiveSourceType,
+    });
+
+    res.status(201).json({ success: true, data: { lessonId, jobId: job.id } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /workshop/lessons/:id/generation-status
+ * Returns the latest generation job status for a lesson.
+ */
+export async function getGenerationStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const userId = req.user!.id;
+
+    // Verify ownership
+    const [lesson] = await db.select({ authorId: lessons.authorId })
+      .from(lessons)
+      .where(eq(lessons.id, id));
+
+    if (!lesson) throw new AppError('Lesson not found', 404);
+    if (lesson.authorId !== userId) throw new AppError('Not authorized', 403);
+
+    const [job] = await db.select()
+      .from(lessonGenerationJobs)
+      .where(eq(lessonGenerationJobs.lessonId, id))
+      .orderBy(desc(lessonGenerationJobs.createdAt))
+      .limit(1);
+
+    if (!job) {
+      res.json({ success: true, data: { job: null } });
+      return;
+    }
+
+    res.json({ success: true, data: { job } });
   } catch (error) {
     next(error);
   }
