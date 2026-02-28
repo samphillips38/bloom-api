@@ -305,6 +305,31 @@ async function runAutoMigrations() {
         WHERE stripe_subscription_id IS NOT NULL
     `);
 
+    // ── Gamification: XP, energy, daily goal, streak freezes ──
+    await db.execute(sql`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS xp                 INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS energy_updated_at  TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS daily_goal         INTEGER NOT NULL DEFAULT 1,
+        ADD COLUMN IF NOT EXISTS streak_freezes     INTEGER NOT NULL DEFAULT 1
+    `);
+    await db.execute(sql`
+      ALTER TABLE streaks
+        ADD COLUMN IF NOT EXISTS streak_freeze_used_date DATE
+    `);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS user_achievements (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        achievement_id VARCHAR(50) NOT NULL,
+        earned_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+        UNIQUE(user_id, achievement_id)
+      )
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_user_achievements_user ON user_achievements(user_id)
+    `);
+
     console.log('✅ Auto-migrations complete');
   } catch (error) {
     console.error('⚠️  Auto-migration warning:', error);
