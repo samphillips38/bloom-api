@@ -24,7 +24,16 @@ const app = express();
 app.set('trust proxy', 1);
 
 // Security middleware
-app.use(helmet());
+// crossOriginResourcePolicy must be 'cross-origin' so browsers can read API
+// responses when the frontend is hosted on a different domain (production).
+// Helmet's default of 'same-origin' silently blocks cross-origin fetches even
+// when CORS is configured correctly.
+// crossOriginOpenerPolicy is irrelevant for a JSON API (no popups), so disable
+// it to avoid polluting responses with a header that only matters for pages.
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  crossOriginOpenerPolicy: false,
+}));
 
 // CORS — allow credentials for refresh token cookies
 const allowedOrigins = env.isDev
