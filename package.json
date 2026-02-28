@@ -22,7 +22,8 @@
     "db:migrate-lesson-sources": "ts-node src/db/migrate-lesson-sources.ts",
     "db:migrate-tags": "ts-node src/db/migrate-tags.ts",
     "db:seed-rich-content": "ts-node src/db/seed-rich-content.ts",
-    "db:migrate-ai-jobs": "ts-node src/db/migrate-ai-jobs.ts"
+    "db:migrate-ai-jobs": "ts-node src/db/migrate-ai-jobs.ts",
+    "db:migrate-gamification": "ts-node src/db/migrate-gamification.ts"
   },
   "dependencies": {
     "@types/multer": "^2.0.0",
@@ -41,6 +42,7 @@
     "openai": "^4.104.0",
     "pdf-parse": "^1.1.4",
     "pg": "^8.11.3",
+    "stripe": "^20.4.0",
     "uuid": "^9.0.1",
     "zod": "^3.22.4"
   },
