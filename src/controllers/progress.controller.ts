@@ -7,6 +7,12 @@ const updateProgressSchema = z.object({
   lessonId: z.string().uuid('Invalid lesson ID'),
   completed: z.boolean().optional(),
   score: z.number().int().min(0).max(100).optional(),
+  lastPageIndex: z.number().int().min(0).optional(),
+});
+
+const savePageSchema = z.object({
+  lessonId: z.string().uuid('Invalid lesson ID'),
+  pageIndex: z.number().int().min(0),
 });
 
 export async function getUserStats(
@@ -90,11 +96,38 @@ export async function updateProgress(
       lessonId: data.lessonId,
       completed: data.completed,
       score: data.score,
+      lastPageIndex: data.lastPageIndex,
     });
     
     res.json({
       success: true,
       data: { progress },
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      next(new AppError(error.errors[0].message, 400));
+    } else {
+      next(error);
+    }
+  }
+}
+
+export async function savePage(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    if (!req.user) {
+      throw new AppError('Not authenticated', 401);
+    }
+
+    const data = savePageSchema.parse(req.body);
+    await progressService.savePageProgress(req.user.id, data.lessonId, data.pageIndex);
+
+    res.json({
+      success: true,
+      data: { saved: true },
     });
   } catch (error) {
     if (error instanceof z.ZodError) {

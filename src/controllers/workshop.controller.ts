@@ -333,14 +333,14 @@ export async function reviewSuggestion(req: Request, res: Response, next: NextFu
 
 export async function generateAIDraft(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { topic, moduleCount } = req.body;
+    const { topic } = req.body;
 
     if (!topic || typeof topic !== 'string' || topic.trim().length === 0) {
       throw new AppError('topic is required', 400);
     }
 
     // Use the new two-phase generation
-    const result = await aiService.generateFullLesson(topic.trim(), moduleCount || 3);
+    const result = await aiService.generateFullLesson(topic.trim());
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
@@ -349,13 +349,13 @@ export async function generateAIDraft(req: Request, res: Response, next: NextFun
 
 export async function generateAIPlan(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { topic, moduleCount } = req.body;
+    const { topic } = req.body;
 
     if (!topic || typeof topic !== 'string' || topic.trim().length === 0) {
       throw new AppError('topic is required', 400);
     }
 
-    const plan = await aiService.generateLessonPlan(topic.trim(), moduleCount || 3);
+    const plan = await aiService.generateLessonPlan(topic.trim());
     res.json({ success: true, data: { plan } });
   } catch (error) {
     next(error);
@@ -550,7 +550,7 @@ export async function getModules(req: Request, res: Response, next: NextFunction
  */
 export async function startAIGeneration(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { topic, moduleCount, sourceType, sourceContent, lessonId: existingLessonId } = req.body;
+    const { topic, sourceType, sourceContent, lessonId: existingLessonId } = req.body;
     const userId = req.user!.id;
 
     if (!topic || typeof topic !== 'string' || topic.trim().length === 0) {
@@ -607,12 +607,48 @@ export async function startAIGeneration(req: Request, res: Response, next: NextF
       userId,
       jobId: job.id,
       topic: topic.trim(),
-      moduleCount: moduleCount || 3,
       sourceContent: resolvedSourceContent,
       sourceType: effectiveSourceType,
     });
 
     res.status(201).json({ success: true, data: { lessonId, jobId: job.id } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  Prerequisites
+// ═══════════════════════════════════════════════════════
+
+/**
+ * POST /workshop/lessons/:id/prerequisites
+ * Body: { prerequisiteLessonId: string }
+ */
+export async function addPrerequisite(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const { prerequisiteLessonId } = req.body;
+
+    if (!prerequisiteLessonId || typeof prerequisiteLessonId !== 'string') {
+      throw new AppError('prerequisiteLessonId is required', 400);
+    }
+
+    await workshopService.addPrerequisite(id, prerequisiteLessonId);
+    res.json({ success: true, data: { added: true } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * DELETE /workshop/lessons/:id/prerequisites/:prereqId
+ */
+export async function removePrerequisite(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id, prereqId } = req.params;
+    await workshopService.removePrerequisite(id, prereqId);
+    res.json({ success: true, data: { removed: true } });
   } catch (error) {
     next(error);
   }

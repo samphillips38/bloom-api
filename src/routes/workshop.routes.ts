@@ -63,4 +63,8 @@ router.post('/lessons/:id/suggest', workshopController.submitSuggestion);
 router.get('/lessons/:id/suggestions', workshopController.getSuggestions);
 router.put('/suggestions/:sid', workshopController.reviewSuggestion);
 
+// Prerequisites
+router.post('/lessons/:id/prerequisites', workshopController.addPrerequisite);
+router.delete('/lessons/:id/prerequisites/:prereqId', workshopController.removePrerequisite);
+
 export default router;

@@ -11,6 +11,7 @@ router.get('/stats', progressController.getUserStats);
 router.get('/course/:courseId', progressController.getCourseProgress);
 router.get('/lesson/:lessonId', progressController.getLessonProgress);
 router.post('/update', progressController.updateProgress);
+router.post('/save-page', progressController.savePage);
 router.post('/energy/consume', progressController.consumeEnergy);
 
 export default router;

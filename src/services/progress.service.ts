@@ -7,6 +7,7 @@ export interface ProgressUpdate {
   lessonId: string;
   completed?: boolean;
   score?: number;
+  lastPageIndex?: number;
 }
 
 export interface UserStats {
@@ -59,7 +60,7 @@ export async function getCourseProgress(
 
 // Update or create progress
 export async function updateProgress(input: ProgressUpdate): Promise<UserProgress> {
-  const { userId, lessonId, completed, score } = input;
+  const { userId, lessonId, completed, score, lastPageIndex } = input;
   
   // Check if progress exists
   const existing = await getLessonProgress(userId, lessonId);
@@ -70,6 +71,7 @@ export async function updateProgress(input: ProgressUpdate): Promise<UserProgres
       .set({
         completed: completed ?? existing.completed,
         score: score ?? existing.score,
+        lastPageIndex: lastPageIndex !== undefined ? lastPageIndex : existing.lastPageIndex,
         completedAt: completed ? new Date() : existing.completedAt,
         updatedAt: new Date(),
       })
@@ -91,6 +93,7 @@ export async function updateProgress(input: ProgressUpdate): Promise<UserProgres
       lessonId,
       completed: completed ?? false,
       score: score ?? null,
+      lastPageIndex: lastPageIndex ?? 0,
       completedAt: completed ? new Date() : null,
     })
     .returning();
@@ -100,6 +103,31 @@ export async function updateProgress(input: ProgressUpdate): Promise<UserProgres
   }
   
   return created;
+}
+
+// Lightweight page-progress save (upsert lastPageIndex without marking complete)
+export async function savePageProgress(
+  userId: string,
+  lessonId: string,
+  pageIndex: number,
+): Promise<void> {
+  const existing = await getLessonProgress(userId, lessonId);
+
+  if (existing) {
+    // Only move the index forward (don't regress if user navigated back)
+    const newIndex = Math.max(existing.lastPageIndex ?? 0, pageIndex);
+    await db
+      .update(userProgress)
+      .set({ lastPageIndex: newIndex, updatedAt: new Date() })
+      .where(eq(userProgress.id, existing.id));
+  } else {
+    await db.insert(userProgress).values({
+      userId,
+      lessonId,
+      completed: false,
+      lastPageIndex: pageIndex,
+    });
+  }
 }
 
 // Update user streak

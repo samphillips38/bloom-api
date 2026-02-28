@@ -143,6 +143,8 @@ export const lessonsRelations = relations(lessons, ({ one, many }) => ({
   progress: many(userProgress),
   edits: many(lessonContentEdits),
   suggestions: many(lessonEditSuggestions),
+  prerequisites: many(lessonPrerequisites, { relationName: 'lessonRequires' }),
+  requiredBy: many(lessonPrerequisites, { relationName: 'lessonIsPrerequisiteFor' }),
 }));
 
 // ============ LESSON MODULES ============
@@ -226,16 +228,45 @@ export type ContentBlock =
   | { type: 'spacer'; size?: 'sm' | 'md' | 'lg' }
   | { type: 'divider' }
 
+// Question format variants for the quiz section
+export type QuestionFormat =
+  | 'multiple-choice'   // tap one correct answer (default)
+  | 'true-false'        // Yes / No binary choice
+  | 'multi-select'      // select all that apply
+  | 'fill-blank'        // type the answer as text
+  | 'word-arrange'      // tap shuffled word chips in the correct order
+
 // Top-level content data for a lesson content entry
 export type ContentData =
   // NEW: rich page with multiple blocks
   | { type: 'page'; blocks: ContentBlock[] }
-  // Questions stay as a dedicated type
-  | { type: 'question'; question: string; questionSegments?: TextSegment[]; options: string[]; optionSegments?: TextSegment[][]; correctIndex: number; explanation?: string; explanationSegments?: TextSegment[] }
+  // Questions stay as a dedicated type — format defaults to 'multiple-choice'
+  | { type: 'question'; format?: QuestionFormat; question: string; questionSegments?: TextSegment[]; options: string[]; optionSegments?: TextSegment[][]; correctIndex: number; correctIndices?: number[]; correctAnswer?: string; explanation?: string; explanationSegments?: TextSegment[] }
   // LEGACY: keep old types for backward compatibility
   | { type: 'text'; text: string; formatting?: { bold?: boolean; superscript?: boolean } }
   | { type: 'image'; url: string; caption?: string }
   | { type: 'interactive'; componentId: string; props?: Record<string, unknown> };
+
+// ============ LESSON PREREQUISITES ============
+export const lessonPrerequisites = pgTable('lesson_prerequisites', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  lessonId: uuid('lesson_id').notNull().references(() => lessons.id, { onDelete: 'cascade' }),
+  prerequisiteLessonId: uuid('prerequisite_lesson_id').notNull().references(() => lessons.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+export const lessonPrerequisitesRelations = relations(lessonPrerequisites, ({ one }) => ({
+  lesson: one(lessons, {
+    fields: [lessonPrerequisites.lessonId],
+    references: [lessons.id],
+    relationName: 'lessonRequires',
+  }),
+  prerequisite: one(lessons, {
+    fields: [lessonPrerequisites.prerequisiteLessonId],
+    references: [lessons.id],
+    relationName: 'lessonIsPrerequisiteFor',
+  }),
+}));
 
 // ============ USER PROGRESS ============
 export const userProgress = pgTable('user_progress', {
@@ -244,6 +275,7 @@ export const userProgress = pgTable('user_progress', {
   lessonId: uuid('lesson_id').notNull().references(() => lessons.id, { onDelete: 'cascade' }),
   completed: boolean('completed').notNull().default(false),
   score: integer('score'),
+  lastPageIndex: integer('last_page_index').default(0),
   completedAt: timestamp('completed_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -430,3 +462,5 @@ export type RefreshToken = typeof refreshTokens.$inferSelect;
 export type NewRefreshToken = typeof refreshTokens.$inferInsert;
 export type LessonGenerationJob = typeof lessonGenerationJobs.$inferSelect;
 export type NewLessonGenerationJob = typeof lessonGenerationJobs.$inferInsert;
+export type LessonPrerequisite = typeof lessonPrerequisites.$inferSelect;
+export type NewLessonPrerequisite = typeof lessonPrerequisites.$inferInsert;
