@@ -58,7 +58,7 @@ export interface LessonMetadata {
     updatedAt: Date;
     aiInvolvement: string;
   };
-  modules?: { id: string; title: string; description: string | null }[];
+  modules?: { id: string; title: string; description: string | null; sources: SourceReference[] }[];
   pages: ContentPageMetadata[];
 }
 
@@ -674,7 +674,7 @@ export async function getLessonMetadata(lessonId: string): Promise<LessonMetadat
       updatedAt: lesson.updatedAt,
       aiInvolvement: lesson.aiInvolvement,
     },
-    modules: modules.map(m => ({ id: m.id, title: m.title, description: m.description })),
+    modules: modules.map(m => ({ id: m.id, title: m.title, description: m.description, sources: (m.sources as SourceReference[]) || [] })),
     pages,
   };
 }

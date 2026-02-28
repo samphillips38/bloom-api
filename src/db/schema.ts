@@ -154,6 +154,7 @@ export const lessonModules = pgTable('lesson_modules', {
   title: varchar('title', { length: 255 }).notNull(),
   description: text('description'),
   orderIndex: integer('order_index').notNull().default(0),
+  sources: jsonb('sources').$type<SourceReference[]>().default([]),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 });
@@ -419,11 +420,12 @@ export const lessonGenerationJobs = pgTable('lesson_generation_jobs', {
   id: uuid('id').primaryKey().defaultRandom(),
   lessonId: uuid('lesson_id').notNull().references(() => lessons.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').notNull().references(() => users.id),
-  status: varchar('status', { length: 20 }).notNull().default('pending'), // pending | planning | generating | completed | failed
+  status: varchar('status', { length: 20 }).notNull().default('pending'), // pending | searching | planning | reviewing | generating | completed | failed
   totalModules: integer('total_modules').notNull().default(0),
   completedModules: integer('completed_modules').notNull().default(0),
   currentModuleTitle: varchar('current_module_title', { length: 255 }),
   sourceType: varchar('source_type', { length: 20 }).notNull().default('topic'), // topic | url | pdf
+  discoveredSources: jsonb('discovered_sources').$type<SourceReference[]>().default([]),
   error: text('error'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),

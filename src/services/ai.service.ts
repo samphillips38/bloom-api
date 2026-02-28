@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import pdfParse from 'pdf-parse';
-import type { ContentData, ContentBlock, TextSegment } from '../db/schema';
+import type { ContentData, ContentBlock, TextSegment, SourceReference } from '../db/schema';
 import { db } from '../config/database';
 import {
   lessons,
@@ -675,6 +675,7 @@ export interface LessonPlan {
   tags: string[];
   prerequisiteConcepts: string[];
   modules: ModulePlan[];
+  sources: SourceReference[];
 }
 
 export interface ModulePlan {
@@ -696,6 +697,53 @@ export interface GeneratedLesson {
   description: string;
   tags: string[];
   modules: GeneratedModule[];
+}
+
+// ═══════════════════════════════════════════════════════
+//  Phase 0: Web Search for Sources
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Search the web for authoritative sources on the given topic using
+ * OpenAI's built-in web search (gpt-4o-search-preview).
+ * Returns a deduplicated list of SourceReferences found in the response.
+ * Falls back to an empty array if web search is unavailable.
+ */
+export async function searchForSources(topic: string): Promise<SourceReference[]> {
+  if (!process.env.OPENAI_API_KEY) return [];
+
+  try {
+    const response = await (openai.chat.completions.create as any)({
+      model: 'gpt-4o-search-preview',
+      web_search_options: { search_context_size: 'medium' },
+      messages: [
+        {
+          role: 'user',
+          content: `Find 5–8 authoritative, freely accessible sources (Wikipedia articles, educational websites, academic introductions, official documentation) for a lesson about: "${topic}". Briefly summarise what each source covers in one sentence.`,
+        },
+      ],
+    });
+
+    const message = response.choices?.[0]?.message;
+    const annotations: any[] = message?.annotations ?? [];
+
+    const seen = new Set<string>();
+    const sources: SourceReference[] = [];
+
+    for (const ann of annotations) {
+      if (ann.type !== 'url_citation') continue;
+      const { url, title } = ann.url_citation ?? {};
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      sources.push({ title: title || url, url });
+    }
+
+    return sources;
+  } catch (err) {
+    // Web search may not be available in all environments — degrade gracefully
+    console.warn('[searchForSources] Web search failed, continuing without sources:', (err as Error).message);
+    return [];
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -800,6 +848,7 @@ Return the lesson plan with title, description, tags, and module outlines.`;
     tags: Array.isArray(parsed.tags) ? parsed.tags.map((t: string) => t.toLowerCase().trim()).filter(Boolean) : [],
     prerequisiteConcepts: Array.isArray(parsed.prerequisiteConcepts) ? parsed.prerequisiteConcepts : [],
     modules: Array.isArray(parsed.modules) ? parsed.modules.map((m: any) => ({ ...m, isQuiz: m.isQuiz === true })) : [],
+    sources: [],
   };
 }
 
@@ -810,6 +859,7 @@ Return the lesson plan with title, description, tags, and module outlines.`;
 export async function refineLessonPlan(
   topic: string,
   initialPlan: LessonPlan,
+  sources?: SourceReference[],
 ): Promise<LessonPlan> {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY is not configured');
@@ -850,6 +900,8 @@ Return the refined lesson plan with the same JSON structure.`;
     tags: Array.isArray(parsed.tags) ? parsed.tags.map((t: string) => t.toLowerCase().trim()).filter(Boolean) : [],
     prerequisiteConcepts: Array.isArray(parsed.prerequisiteConcepts) ? parsed.prerequisiteConcepts : [],
     modules: Array.isArray(parsed.modules) ? parsed.modules.map((m: any) => ({ ...m, isQuiz: m.isQuiz === true })) : [],
+    // Carry the sources discovered during Phase 0 forward through the plan
+    sources: sources ?? [],
   };
 }
 
@@ -961,15 +1013,30 @@ export async function startBackgroundGeneration(params: BackgroundGenerationPara
       .where(eq(lessonGenerationJobs.id, jobId));
 
   try {
+    // ── Phase 0: Search for authoritative sources ──────
+    await updateJob({ status: 'searching' });
+
+    const discoveredSources = await searchForSources(topic);
+
+    // Persist the discovered sources to the job so the frontend can display them
+    if (discoveredSources.length > 0) {
+      await updateJob({ discoveredSources });
+    }
+
     // ── Phase 1: Planning ──────────────────────────────
     await updateJob({ status: 'planning' });
 
-    const initialPlan = await generateLessonPlan(topic, sourceContent);
+    // Build a concise source summary to steer the AI toward accurate content
+    const sourceContext = discoveredSources.length > 0
+      ? `\n\nUse the following authoritative sources to inform the lesson content:\n${discoveredSources.map((s, i) => `${i + 1}. ${s.title}${s.url ? ` (${s.url})` : ''}`).join('\n')}`
+      : '';
+
+    const initialPlan = await generateLessonPlan(topic, sourceContent ? `${sourceContent}${sourceContext}` : sourceContext || undefined);
 
     // ── Phase 1b: Reviewing & refining the plan ────────
     await updateJob({ status: 'reviewing' });
 
-    const plan = await refineLessonPlan(topic, initialPlan);
+    const plan = await refineLessonPlan(topic, initialPlan, discoveredSources);
 
     // Update the lesson stub with AI-generated title/description/tags + prerequisite concepts
     // Store prerequisiteConcepts as a special metadata field alongside the tags
@@ -1011,6 +1078,7 @@ export async function startBackgroundGeneration(params: BackgroundGenerationPara
         title: moduleTitle,
         description: modulePlan.description,
         orderIndex: i,
+        sources: plan.sources,
       }).returning();
 
       // Generate module pages

@@ -297,7 +297,7 @@ export async function getLessonMetadata(lessonId: string): Promise<LessonMetadat
       updatedAt: courseCreatedAt,
       aiInvolvement,
     },
-    modules: modules.map(m => ({ id: m.id, title: m.title, description: m.description })),
+    modules: modules.map(m => ({ id: m.id, title: m.title, description: m.description, sources: (m.sources as SourceReference[]) || [] })),
     pages,
   };
 }
