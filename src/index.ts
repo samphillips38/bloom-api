@@ -13,6 +13,8 @@ import coursesRoutes from './routes/courses.routes';
 import progressRoutes from './routes/progress.routes';
 import workshopRoutes from './routes/workshop.routes';
 import libraryRoutes from './routes/library.routes';
+import subscriptionRoutes from './routes/subscription.routes';
+import * as subscriptionController from './controllers/subscription.controller';
 import { authMiddleware } from './middleware/auth.middleware';
 
 const app = express();
@@ -44,6 +46,14 @@ app.use(cors({
   credentials: true,
 }));
 
+// ── Stripe Webhook: MUST be registered BEFORE express.json() ──
+// Stripe requires the raw request body to verify the webhook signature.
+app.post(
+  '/api/subscription/webhook',
+  express.raw({ type: 'application/json' }),
+  subscriptionController.webhook,
+);
+
 // Body parsing & cookies
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -60,6 +70,7 @@ app.use('/api/courses', coursesRoutes);
 app.use('/api/progress', progressRoutes);
 app.use('/api/workshop', authMiddleware, workshopRoutes);
 app.use('/api/library', authMiddleware, libraryRoutes);
+app.use('/api/subscription', subscriptionRoutes);
 
 // Error handling
 app.use(notFoundHandler);
@@ -254,6 +265,44 @@ async function runAutoMigrations() {
     `);
     await db.execute(sql`
       CREATE INDEX IF NOT EXISTS idx_lesson_prerequisites_prereq ON lesson_prerequisites(prerequisite_lesson_id)
+    `);
+
+    // ── Subscriptions table & stripe_customer_id column ──
+    await db.execute(sql`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS stripe_customer_id VARCHAR(255)
+    `);
+    await db.execute(sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_stripe_customer ON users(stripe_customer_id)
+        WHERE stripe_customer_id IS NOT NULL
+    `);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+        stripe_customer_id VARCHAR(255),
+        stripe_subscription_id VARCHAR(255) UNIQUE,
+        stripe_price_id VARCHAR(255),
+        plan VARCHAR(20),
+        status VARCHAR(30) NOT NULL DEFAULT 'active',
+        current_period_start TIMESTAMP,
+        current_period_end TIMESTAMP,
+        cancel_at_period_end BOOLEAN NOT NULL DEFAULT false,
+        canceled_at TIMESTAMP,
+        trial_end TIMESTAMP,
+        granted_by VARCHAR(20),
+        granted_by_admin_id UUID REFERENCES users(id),
+        grant_note TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id)
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_subscriptions_stripe_sub ON subscriptions(stripe_subscription_id)
+        WHERE stripe_subscription_id IS NOT NULL
     `);
 
     console.log('✅ Auto-migrations complete');

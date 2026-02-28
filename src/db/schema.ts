@@ -16,6 +16,7 @@ export const users = pgTable('users', {
   provider: varchar('provider', { length: 50 }).default('email'), // email, google, apple
   providerId: varchar('provider_id', { length: 255 }),
   isPremium: boolean('is_premium').notNull().default(false),
+  stripeCustomerId: varchar('stripe_customer_id', { length: 255 }), // Stripe customer ID
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 });
@@ -24,6 +25,7 @@ export const usersRelations = relations(users, ({ many, one }) => ({
   progress: many(userProgress),
   streak: one(streaks),
   lessons: many(lessons),
+  subscription: one(subscriptions),
 }));
 
 // ============ STREAKS ============
@@ -462,6 +464,45 @@ export const userAchievementsRelations = relations(userAchievements, ({ one }) =
   }),
 }));
 
+// ============ SUBSCRIPTIONS ============
+// Tracks Stripe subscriptions and admin-granted premium access
+export const subscriptions = pgTable('subscriptions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }).unique(),
+  // Stripe fields (null for admin-granted subscriptions)
+  stripeCustomerId: varchar('stripe_customer_id', { length: 255 }),
+  stripeSubscriptionId: varchar('stripe_subscription_id', { length: 255 }).unique(),
+  stripePriceId: varchar('stripe_price_id', { length: 255 }),
+  // Plan details
+  plan: varchar('plan', { length: 20 }), // 'monthly' | 'yearly'
+  // Subscription status
+  status: varchar('status', { length: 30 }).notNull().default('active'),
+  // 'active' | 'trialing' | 'past_due' | 'canceled' | 'unpaid' | 'admin_granted'
+  currentPeriodStart: timestamp('current_period_start'),
+  currentPeriodEnd: timestamp('current_period_end'),
+  cancelAtPeriodEnd: boolean('cancel_at_period_end').notNull().default(false),
+  canceledAt: timestamp('canceled_at'),
+  trialEnd: timestamp('trial_end'),
+  // Admin grant tracking
+  grantedBy: varchar('granted_by', { length: 20 }), // 'stripe' | 'admin'
+  grantedByAdminId: uuid('granted_by_admin_id').references(() => users.id),
+  grantNote: text('grant_note'), // admin note when granting access
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+export const subscriptionsRelations = relations(subscriptions, ({ one }) => ({
+  user: one(users, {
+    fields: [subscriptions.userId],
+    references: [users.id],
+  }),
+  grantedByAdmin: one(users, {
+    fields: [subscriptions.grantedByAdminId],
+    references: [users.id],
+    relationName: 'adminGrants',
+  }),
+}));
+
 // ============ TYPE EXPORTS ============
 export type UserLibrary = typeof userLibrary.$inferSelect;
 export type NewUserLibrary = typeof userLibrary.$inferInsert;
@@ -487,3 +528,5 @@ export type NewLessonGenerationJob = typeof lessonGenerationJobs.$inferInsert;
 export type LessonPrerequisite = typeof lessonPrerequisites.$inferSelect;
 export type NewLessonPrerequisite = typeof lessonPrerequisites.$inferInsert;
 export type UserAchievement = typeof userAchievements.$inferSelect;
+export type Subscription = typeof subscriptions.$inferSelect;
+export type NewSubscription = typeof subscriptions.$inferInsert;

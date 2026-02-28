@@ -28,6 +28,15 @@ export const env = {
   APPLE_TEAM_ID: process.env.APPLE_TEAM_ID || '',
   APPLE_KEY_ID: process.env.APPLE_KEY_ID || '',
   APPLE_PRIVATE_KEY: process.env.APPLE_PRIVATE_KEY || '', // PEM-encoded .p8 key contents
+
+  // Stripe (Payments)
+  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY || '',
+  STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET || '',
+  STRIPE_MONTHLY_PRICE_ID: process.env.STRIPE_MONTHLY_PRICE_ID || '',
+  STRIPE_YEARLY_PRICE_ID: process.env.STRIPE_YEARLY_PRICE_ID || '',
+
+  // Admin
+  ADMIN_SECRET: process.env.ADMIN_SECRET || 'bloom-admin-secret-change-in-production',
   
   isDev: process.env.NODE_ENV !== 'production',
   isProd: process.env.NODE_ENV === 'production',
