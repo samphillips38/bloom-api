@@ -9,6 +9,10 @@ export const users = pgTable('users', {
   name: varchar('name', { length: 255 }).notNull(),
   avatarUrl: text('avatar_url'),
   energy: integer('energy').notNull().default(5),
+  energyUpdatedAt: timestamp('energy_updated_at'),           // null = at max capacity
+  xp: integer('xp').notNull().default(0),                   // total lifetime XP
+  dailyGoal: integer('daily_goal').notNull().default(1),     // lessons per day
+  streakFreezes: integer('streak_freezes').notNull().default(1), // available freeze tokens
   provider: varchar('provider', { length: 50 }).default('email'), // email, google, apple
   providerId: varchar('provider_id', { length: 255 }),
   isPremium: boolean('is_premium').notNull().default(false),
@@ -29,6 +33,7 @@ export const streaks = pgTable('streaks', {
   currentStreak: integer('current_streak').notNull().default(0),
   longestStreak: integer('longest_streak').notNull().default(0),
   lastActivityDate: date('last_activity_date'),
+  streakFreezeUsedDate: date('streak_freeze_used_date'),     // last date a freeze was consumed
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 });
@@ -442,6 +447,21 @@ export const lessonGenerationJobsRelations = relations(lessonGenerationJobs, ({ 
   }),
 }));
 
+// ============ USER ACHIEVEMENTS ============
+export const userAchievements = pgTable('user_achievements', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  achievementId: varchar('achievement_id', { length: 50 }).notNull(),
+  earnedAt: timestamp('earned_at').notNull().defaultNow(),
+});
+
+export const userAchievementsRelations = relations(userAchievements, ({ one }) => ({
+  user: one(users, {
+    fields: [userAchievements.userId],
+    references: [users.id],
+  }),
+}));
+
 // ============ TYPE EXPORTS ============
 export type UserLibrary = typeof userLibrary.$inferSelect;
 export type NewUserLibrary = typeof userLibrary.$inferInsert;
@@ -466,3 +486,4 @@ export type LessonGenerationJob = typeof lessonGenerationJobs.$inferSelect;
 export type NewLessonGenerationJob = typeof lessonGenerationJobs.$inferInsert;
 export type LessonPrerequisite = typeof lessonPrerequisites.$inferSelect;
 export type NewLessonPrerequisite = typeof lessonPrerequisites.$inferInsert;
+export type UserAchievement = typeof userAchievements.$inferSelect;
