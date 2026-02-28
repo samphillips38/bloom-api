@@ -224,6 +224,26 @@ async function runAutoMigrations() {
       CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash)
     `);
 
+    // ── Prerequisites & progress tracking ──
+    await db.execute(sql`
+      ALTER TABLE user_progress ADD COLUMN IF NOT EXISTS last_page_index INTEGER DEFAULT 0
+    `);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS lesson_prerequisites (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        lesson_id UUID NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+        prerequisite_lesson_id UUID NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        UNIQUE(lesson_id, prerequisite_lesson_id)
+      )
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_lesson_prerequisites_lesson ON lesson_prerequisites(lesson_id)
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_lesson_prerequisites_prereq ON lesson_prerequisites(prerequisite_lesson_id)
+    `);
+
     console.log('✅ Auto-migrations complete');
   } catch (error) {
     console.error('⚠️  Auto-migration warning:', error);

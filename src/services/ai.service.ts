@@ -91,6 +91,11 @@ const LESSON_PAGE_SCHEMA = {
   type: 'object' as const,
   properties: {
     type: { type: 'string' as const, enum: ['page', 'question'] },
+    // question format (only relevant when type === 'question')
+    format: {
+      type: ['string', 'null'] as const,
+      enum: ['multiple-choice', 'true-false', 'multi-select', 'fill-blank', 'word-arrange', null],
+    },
     // page fields
     blocks: {
       type: ['array', 'null'] as const,
@@ -107,13 +112,20 @@ const LESSON_PAGE_SCHEMA = {
       items: { type: 'string' as const },
     },
     correctIndex: { type: ['integer', 'null'] as const },
+    // For multi-select: array of correct option indices
+    correctIndices: {
+      type: ['array', 'null'] as const,
+      items: { type: 'integer' as const },
+    },
+    // For fill-blank: the exact correct text answer
+    correctAnswer: { type: ['string', 'null'] as const },
     explanation: { type: ['string', 'null'] as const },
     explanationSegments: {
       type: ['array', 'null'] as const,
       items: TEXT_SEGMENT_SCHEMA,
     },
   },
-  required: ['type', 'blocks', 'question', 'questionSegments', 'options', 'correctIndex', 'explanation', 'explanationSegments'],
+  required: ['type', 'format', 'blocks', 'question', 'questionSegments', 'options', 'correctIndex', 'correctIndices', 'correctAnswer', 'explanation', 'explanationSegments'],
   additionalProperties: false,
 };
 
@@ -133,6 +145,11 @@ const LESSON_PLAN_SCHEMA = {
         type: 'array' as const,
         items: { type: 'string' as const },
       },
+      prerequisiteConcepts: {
+        type: 'array' as const,
+        items: { type: 'string' as const },
+        description: 'Topics/concepts the learner should already understand before this lesson',
+      },
       modules: {
         type: 'array' as const,
         items: {
@@ -142,13 +159,14 @@ const LESSON_PLAN_SCHEMA = {
             description: { type: 'string' as const },
             pageCount: { type: 'integer' as const },
             outline: { type: 'string' as const },
+            isQuiz: { type: 'boolean' as const },
           },
-          required: ['title', 'description', 'pageCount', 'outline'],
+          required: ['title', 'description', 'pageCount', 'outline', 'isQuiz'],
           additionalProperties: false,
         },
       },
     },
-    required: ['title', 'description', 'tags', 'modules'],
+    required: ['title', 'description', 'tags', 'prerequisiteConcepts', 'modules'],
     additionalProperties: false,
   },
 };
@@ -204,21 +222,32 @@ Given a topic, create a lesson plan with:
 1. A compelling title for the lesson
 2. A brief description (1-2 sentences)
 3. Relevant topic tags (2-5 short, lowercase labels)
-4. A list of modules that break the lesson into logical sections
+4. prerequisiteConcepts: 2-5 brief topic strings that a learner should already know before attempting this lesson (e.g. "basic algebra", "Newton's laws", "Python basics"). These help learners discover whether they are ready and help the platform link related lessons.
+5. A list of modules that break the lesson into logical sections
 
 Each module should have:
 - A clear title
 - A brief description (what the module covers)
 - A recommended page count (mix of teaching pages and questions)
 - An outline describing what should be covered, key points, and suggested question topics
+- isQuiz: set to true ONLY for the final dedicated quiz module, false for all teaching modules
+
+MANDATORY FINAL QUIZ MODULE:
+Every lesson MUST end with a dedicated quiz module (isQuiz: true) titled "Final Quiz" or "<Topic> Quiz".
+- This module contains ONLY question pages — no teaching content
+- It should have 5–8 questions in MIXED formats: multiple-choice, true-false, multi-select, fill-blank, word-arrange
+- Questions should comprehensively test the key concepts from ALL preceding modules
+- Set pageCount to the number of questions (5–8)
 
 Guidelines:
-- Create the number of modules requested by the user
-- Each module should have 3-6 pages
+- Decide the number of teaching modules based on topic complexity:
+  * 2–3 teaching modules + 1 quiz module for focused, narrow topics
+  * 4–5 teaching modules + 1 quiz module for broad topics
+  * Up to 6 teaching modules + 1 quiz module for comprehensive topics
+- Each teaching module should have 3-6 pages
 - Modules should build progressively on each other
-- The first module should introduce the topic
-- The last module should wrap up with summary/review
-- Include question suggestions in each module outline`;
+- The first module should introduce the topic with a compelling real-world hook
+- Include question suggestions in each teaching module outline`;
 
 const MODULE_SYSTEM_PROMPT = `You are an expert educational content creator for the Bloom learning platform. You create engaging, interactive lesson content for a single module within a larger lesson.
 
@@ -297,47 +326,80 @@ COMPONENT REFERENCE:
     Example (with answer): "{\"title\":\"Place the Value\",\"question\":\"Where is 3/4 on this number line?\",\"min\":0,\"max\":1,\"step\":0.05,\"unit\":\"\",\"answer\":0.75,\"answerTolerance\":0.1}"
     Example (self-rating): "{\"title\":\"Confidence Check\",\"question\":\"How confident are you? (0 = not at all, 10 = very)\",\"min\":0,\"max\":10,\"step\":1,\"unit\":\"\"}"
 
-11. hotspot-diagram — Clickable pins on a diagram. x/y are % (0-100) from top-left. Best for anatomy, circuits.
-    Required props: title, diagramEmoji, diagramLabel, hotspots (array of {x, y, label, description, emoji})
-    Example componentPropsJson: "{\"title\":\"Cell Structure\",\"diagramEmoji\":\"🔬\",\"diagramLabel\":\"Animal Cell\",\"hotspots\":[{\"x\":50,\"y\":45,\"label\":\"Nucleus\",\"description\":\"Controls cell activity and contains DNA.\",\"emoji\":\"🔴\"},{\"x\":70,\"y\":30,\"label\":\"Mitochondria\",\"description\":\"Produces ATP — the cell's energy currency.\",\"emoji\":\"⚡\"}]}"
-
-12. concept-web — Central node with satellite concepts. 4–6 nodes ideal. Best for mind maps.
+11. concept-web — Expandable hub-and-spoke card layout. Central concept at the top, satellite concept cards below — tap each to reveal its description. Best for overviews, mind maps, exploring relationships between ideas. 4–6 nodes ideal.
     Required props: title, center (string), centerEmoji (string), nodes (array of {label, description, emoji})
     Example componentPropsJson: "{\"title\":\"Types of Energy\",\"center\":\"Energy\",\"centerEmoji\":\"⚡\",\"nodes\":[{\"label\":\"Kinetic\",\"description\":\"Energy of motion — a moving car, running water.\",\"emoji\":\"🚗\"},{\"label\":\"Potential\",\"description\":\"Stored energy — a raised weight, a compressed spring.\",\"emoji\":\"⬆️\"},{\"label\":\"Thermal\",\"description\":\"Heat energy from particle vibration.\",\"emoji\":\"🔥\"}]}"
 
-13. sine-wave-explorer — Interactive sine wave with sliders. Best for trigonometry, waves.
+12. sine-wave-explorer — Interactive sine wave with sliders. Best for trigonometry, waves.
     Optional props: title (string), showAmplitude (bool), showFrequency (bool), showPhase (bool)
     Example componentPropsJson: "{\"title\":\"Explore the Sine Wave\",\"showAmplitude\":true,\"showFrequency\":true,\"showPhase\":false}"
 
-14. truth-table-builder — Fill-in truth table for a logical operator. Best for logic, CS.
+13. truth-table-builder — Fill-in truth table for a logical operator. Best for logic, CS.
     Required props: title (string), operator ("AND" | "OR" | "NOT" | "IMPLIES")
     Example componentPropsJson: "{\"title\":\"OR Truth Table\",\"operator\":\"OR\"}"
 
-15. venn-diagram — Two-circle Venn diagram with clickable regions. Best for set theory, comparisons.
+14. venn-diagram — Two-circle Venn diagram with clickable regions. Best for set theory, comparisons.
     Required props: title, leftLabel, rightLabel, leftItems (string[]), bothItems (string[]), rightItems (string[])
     Example componentPropsJson: "{\"title\":\"Vertebrates vs Warm-blooded\",\"leftLabel\":\"Vertebrates only\",\"rightLabel\":\"Warm-blooded only\",\"leftItems\":[\"Fish\",\"Reptiles\"],\"bothItems\":[\"Birds\",\"Mammals\"],\"rightItems\":[]}"
 
 ═══════════════════════════════
-QUESTION format:
+QUESTION formats:
 ═══════════════════════════════
+
+All question types share the same base structure. Set unused fields to null.
+
+1. MULTIPLE-CHOICE (format: "multiple-choice") — 4 options, one correct
 {
-  "type": "question",
-  "blocks": null,
-  "question": "What is X?",
-  "questionSegments": [{ "text": "What is ", "bold": null, "italic": null, "color": null, "definition": null }, { "text": "X", "bold": true, "italic": null, "color": null, "definition": null }],
-  "options": ["Option A", "Option B", "Option C", "Option D"],
-  "correctIndex": 0,
-  "explanation": "Because...",
-  "explanationSegments": [{ "text": "Because...", "bold": null, "italic": null, "color": null, "definition": null }]
+  "type": "question", "format": "multiple-choice", "blocks": null,
+  "question": "What is X?", "questionSegments": [{"text":"What is X?","bold":null,"italic":null,"color":null,"definition":null}],
+  "options": ["Option A","Option B","Option C","Option D"],
+  "correctIndex": 0, "correctIndices": null, "correctAnswer": null,
+  "explanation": "Because...", "explanationSegments": [{"text":"Because...","bold":null,"italic":null,"color":null,"definition":null}]
+}
+
+2. TRUE-FALSE (format: "true-false") — exactly 2 options: "True" and "False"
+{
+  "type": "question", "format": "true-false", "blocks": null,
+  "question": "Photosynthesis produces oxygen.", "questionSegments": [{"text":"Photosynthesis produces oxygen.","bold":null,"italic":null,"color":null,"definition":null}],
+  "options": ["True","False"],
+  "correctIndex": 0, "correctIndices": null, "correctAnswer": null,
+  "explanation": "Yes, oxygen is a byproduct.", "explanationSegments": null
+}
+
+3. MULTI-SELECT (format: "multi-select") — 4-5 options, MULTIPLE correct (use correctIndices)
+{
+  "type": "question", "format": "multi-select", "blocks": null,
+  "question": "Which of these are noble gases? (Select all that apply)", "questionSegments": null,
+  "options": ["Helium","Oxygen","Neon","Nitrogen","Argon"],
+  "correctIndex": null, "correctIndices": [0,2,4], "correctAnswer": null,
+  "explanation": "Helium, Neon, and Argon are all noble gases.", "explanationSegments": null
+}
+
+4. FILL-IN-THE-BLANK (format: "fill-blank") — learner types exact answer (use correctAnswer)
+{
+  "type": "question", "format": "fill-blank", "blocks": null,
+  "question": "Water is made of hydrogen and ___.", "questionSegments": null,
+  "options": null,
+  "correctIndex": null, "correctIndices": null, "correctAnswer": "oxygen",
+  "explanation": "H₂O contains hydrogen and oxygen atoms.", "explanationSegments": null
+}
+
+5. WORD-ARRANGE (format: "word-arrange") — options contains the shuffled word chips; correctIndex is unused; correctAnswer is the space-joined correct sentence
+{
+  "type": "question", "format": "word-arrange", "blocks": null,
+  "question": "Arrange these words to form the correct statement:", "questionSegments": null,
+  "options": ["light","plants","energy","absorb","to","use"],
+  "correctIndex": null, "correctIndices": null, "correctAnswer": "plants absorb light to use energy",
+  "explanation": "Plants absorb light energy for photosynthesis.", "explanationSegments": null
 }
 
 ═══════════════════════════════
 GUIDELINES:
 ═══════════════════════════════
-- Use interactive components liberally — aim for at least 1-2 per module to make lessons engaging
+- Use interactive components liberally — aim for at least 1-2 per TEACHING module to make lessons engaging
 - Place interactive blocks on their OWN page (or with minimal surrounding text) so they have visual space
 - Use rich text formatting: bold for key terms, colors for emphasis, definition tooltips
-- Include at least 1 multiple-choice question per module
+- Include at least 1 multiple-choice question per teaching module
 - For image blocks, use format "wikimedia:<search term>" to source a real diagram from Wikimedia Commons (e.g. "wikimedia:photosynthesis light reaction", "wikimedia:neuron anatomy", "wikimedia:mitosis cell division stages"). Prefer real diagrams over emoji placeholders. Only use "emoji:<emoji>" when the topic is truly abstract and no real diagram would apply.
 - Use LaTeX for math equations
 - Keep paragraphs concise and mobile-friendly
@@ -345,7 +407,89 @@ GUIDELINES:
 - Callout styles: "info", "tip", "warning", "example"
 - For ALL unused/optional fields on standard blocks, always write null (never omit a field)
 - For interactive blocks, componentPropsJson must be a valid JSON string (double-quote all keys and strings)
-- Choose interactive components that match the content: use concept-web for overviews, timeline for history, memory-match for symbols, fill-in-the-blank for exercises, etc.`;
+- Choose interactive components that match the content: use concept-web for overviews, timeline for history, memory-match for symbols, fill-in-the-blank for exercises, etc.
+
+QUIZ MODULE RULES (when generating the dedicated final quiz):
+- Include ONLY question pages — NO teaching content, NO interactive components, NO page-type blocks
+- Use a MIX of all 5 question formats across the 5–8 questions
+- Questions must test KEY CONCEPTS from across ALL modules of the lesson
+- For fill-blank: use simple, unambiguous single-word or short-phrase answers
+- For word-arrange: use 5–8 word chips that form a meaningful statement about the topic
+- For multi-select: clearly indicate in the question text to "select all that apply"
+- For all question types: ALWAYS set format to one of the 5 valid strings (never null for quiz questions)
+- Set ALL unused fields to null (e.g. blocks: null, correctIndices: null when not multi-select, etc.)`;
+
+// ═══════════════════════════════════════════════════════
+//  Phase 1b: Review System Prompt
+// ═══════════════════════════════════════════════════════
+
+const REVIEW_SYSTEM_PROMPT = `You are a senior educational content reviewer for the Bloom learning platform. Your role is to critically evaluate and refine an initial lesson plan BEFORE content is generated, so the final lesson is genuinely excellent — not generic or filler-heavy.
+
+You will receive an initial lesson plan and must return an improved version with the same JSON structure (title, description, tags, modules with title, description, pageCount, outline).
+
+═══════════════════════════════
+REVIEW CRITERIA — apply each rigorously:
+═══════════════════════════════
+
+1. CONTENT QUALITY — eliminate filler:
+   - Every module outline must specify EXACTLY what to teach, not vague instructions like "explain the concept"
+   - Replace vague phrases with concrete content: instead of "discuss the importance of X", write "explain WHY X matters using the specific example of Y"
+   - Ensure depth over breadth — each page should leave the learner knowing something specific and usable
+   - Questions must test genuine understanding, not trivial recall (not "What is X called?" but "Why does X happen?")
+
+2. LESSON FLOW — make it coherent:
+   - The first module should hook the learner with an interesting real-world application or surprising fact before diving into theory
+   - Each module outline must note how it connects to the previous module (write a brief "Building on [previous module]..." transition note)
+   - Concepts must be introduced before they are used — check for any forward references
+   - The final module should synthesise all key ideas and provide genuine closure, not just repetition
+
+3. INTERACTIVE COMPONENTS — the heart of Bloom lessons:
+   - EVERY module must include at least 1–2 interactive components. Specify them EXPLICITLY in the outline.
+   - Choose the right component for the content:
+     * flashcard-deck → vocabulary, definitions, key terms
+     * word-match / memory-match → terminology matching, symbols, formulas
+     * sequence-sorter → processes, algorithms, historical timelines, step-by-step procedures
+     * sortable-categories → classification, taxonomy, grouping exercises
+     * fill-in-the-blank → practising definitions, completing formulas, cloze exercises
+     * timeline → historical events, biographical sequences, era comparisons
+     * concept-web → overview of a topic, relationships between ideas, mind maps
+     * bar-chart-builder → comparing quantities, data exploration, statistics
+     * venn-diagram → comparing two concepts, set theory, overlapping categories
+     * number-line → numerical estimation, fractions, probability, placing values
+     * poll → reflection, opinion checks, "what do you think?" moments
+     * sine-wave-explorer → waves, trigonometry, oscillations
+     * truth-table-builder → logic gates, boolean operators
+   - Write in the outline exactly which interactive to use and what it should contain, e.g.:
+     "Interactive: sequence-sorter — learner orders the 5 steps of the nitrogen cycle"
+     "Interactive: concept-web — central node 'Photosynthesis', satellite nodes for Light Reaction, Calvin Cycle, Chlorophyll, Glucose, Oxygen"
+   - Replace passive reading pages with interactive equivalents wherever possible
+
+4. OPENING IMAGE — mandatory:
+   - The very first page of Module 1 must open with a real Wikimedia Commons image, not an emoji
+   - Include this line in Module 1's outline: "Opening image: wikimedia:<specific descriptive search term>"
+   - Choose a search term that will find a compelling, relevant diagram or photograph (e.g. "wikimedia:human brain anatomy labeled diagram", "wikimedia:photosynthesis light reaction chloroplast")
+
+5. IMAGES THROUGHOUT:
+   - Suggest specific Wikimedia search terms wherever a diagram would genuinely aid understanding
+   - Format: "Image: wikimedia:<search term>" in the relevant module outline
+   - Only suggest where a real diagram exists — avoid decorative images
+
+5. FINAL QUIZ MODULE — mandatory:
+   - The LAST module must ALWAYS have isQuiz: true and be a dedicated quiz with 5–8 questions
+   - Ensure the quiz tests ALL key concepts from the entire lesson, not just the last module
+   - The quiz module outline must specify exactly which question formats to use:
+     * multiple-choice: standard 4-option MCQ
+     * true-false: binary yes/no (2 options)
+     * multi-select: "select all that apply" (multiple correct answers)
+     * fill-blank: learner types the exact answer
+     * word-arrange: learner taps shuffled word chips to form the answer
+   - All teaching modules should have isQuiz: false
+
+6. PREREQUISITE CONCEPTS — verify quality:
+   - prerequisiteConcepts should be 2-5 specific, learnable topic strings
+   - They should be concrete enough to search for (e.g. "basic algebra" not "math")
+
+Return the refined plan. You may adjust pageCount per module if more or fewer pages are needed for quality (keep 3–6 per teaching module, 5–8 for quiz module). Do not dramatically change the number of teaching modules unless the structure is genuinely wrong for the topic.`;
 
 // ═══════════════════════════════════════════════════════
 //  Wikimedia Commons image resolution
@@ -498,12 +642,16 @@ function cleanBlock(block: any): ContentBlock {
 function cleanPages(pages: any[]): ContentData[] {
   return pages.map((page: any): ContentData => {
     if (page.type === 'question') {
+      const format = page.format || 'multiple-choice';
       return {
         type: 'question' as const,
+        format,
         question: page.question || 'Question',
         questionSegments: cleanSegments(page.questionSegments) || [{ text: page.question || 'Question' }],
-        options: page.options || ['A', 'B', 'C', 'D'],
-        correctIndex: typeof page.correctIndex === 'number' ? page.correctIndex : 0,
+        options: page.options || [],
+        correctIndex: typeof page.correctIndex === 'number' ? page.correctIndex : (format === 'multiple-choice' || format === 'true-false' ? 0 : undefined),
+        correctIndices: Array.isArray(page.correctIndices) ? page.correctIndices : undefined,
+        correctAnswer: typeof page.correctAnswer === 'string' ? page.correctAnswer : undefined,
         explanation: page.explanation || undefined,
         explanationSegments: cleanSegments(page.explanationSegments),
       };
@@ -525,6 +673,7 @@ export interface LessonPlan {
   title: string;
   description: string;
   tags: string[];
+  prerequisiteConcepts: string[];
   modules: ModulePlan[];
 }
 
@@ -533,6 +682,7 @@ export interface ModulePlan {
   description: string;
   pageCount: number;
   outline: string;
+  isQuiz: boolean;
 }
 
 export interface GeneratedModule {
@@ -604,7 +754,6 @@ export async function extractPdfContent(input: Buffer | string): Promise<string>
 
 export async function generateLessonPlan(
   topic: string,
-  moduleCount: number = 3,
   sourceContent?: string,
 ): Promise<LessonPlan> {
   if (!process.env.OPENAI_API_KEY) {
@@ -618,7 +767,7 @@ export async function generateLessonPlan(
   const userPrompt = `Plan a comprehensive lesson about: "${topic}"
 
 The lesson should:
-- Have approximately ${moduleCount} modules
+- Have as many modules as the topic genuinely requires (you decide — see guidelines)
 - Be suitable for someone learning this topic for the first time
 - Progress from fundamentals to more advanced concepts
 - Include questions in each module to reinforce learning${sourceSection}
@@ -649,7 +798,58 @@ Return the lesson plan with title, description, tags, and module outlines.`;
     title: parsed.title,
     description: parsed.description,
     tags: Array.isArray(parsed.tags) ? parsed.tags.map((t: string) => t.toLowerCase().trim()).filter(Boolean) : [],
-    modules: parsed.modules,
+    prerequisiteConcepts: Array.isArray(parsed.prerequisiteConcepts) ? parsed.prerequisiteConcepts : [],
+    modules: Array.isArray(parsed.modules) ? parsed.modules.map((m: any) => ({ ...m, isQuiz: m.isQuiz === true })) : [],
+  };
+}
+
+// ═══════════════════════════════════════════════════════
+//  Phase 1b: Review and refine the lesson plan
+// ═══════════════════════════════════════════════════════
+
+export async function refineLessonPlan(
+  topic: string,
+  initialPlan: LessonPlan,
+): Promise<LessonPlan> {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY is not configured');
+  }
+
+  const userPrompt = `Review and refine the following initial lesson plan for the topic: "${topic}"
+
+Initial plan:
+${JSON.stringify(initialPlan, null, 2)}
+
+Apply all review criteria: eliminate filler, improve flow, add specific interactive components to every module, ensure the first page uses a Wikimedia image, and specify image search terms where diagrams would help.
+
+Return the refined lesson plan with the same JSON structure.`;
+
+  const response = await openai.chat.completions.create({
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: REVIEW_SYSTEM_PROMPT },
+      { role: 'user', content: userPrompt },
+    ],
+    temperature: 0.5,
+    max_tokens: 6000,
+    response_format: {
+      type: 'json_schema',
+      json_schema: LESSON_PLAN_SCHEMA,
+    },
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error('No response from AI during lesson plan review');
+  }
+
+  const parsed = JSON.parse(content);
+  return {
+    title: parsed.title,
+    description: parsed.description,
+    tags: Array.isArray(parsed.tags) ? parsed.tags.map((t: string) => t.toLowerCase().trim()).filter(Boolean) : [],
+    prerequisiteConcepts: Array.isArray(parsed.prerequisiteConcepts) ? parsed.prerequisiteConcepts : [],
+    modules: Array.isArray(parsed.modules) ? parsed.modules.map((m: any) => ({ ...m, isQuiz: m.isQuiz === true })) : [],
   };
 }
 
@@ -670,13 +870,18 @@ export async function generateModuleContent(
   }
 
   const isFirst = moduleIndex === 0;
-  const isLast = moduleIndex === totalModules - 1;
+  const isQuizModule = modulePlan.isQuiz === true;
 
   let contextInstructions = '';
-  if (isFirst) {
-    contextInstructions = `This is the FIRST module of the lesson. Start with a welcoming intro page with an emoji image and heading that introduces the overall lesson topic.`;
-  } else if (isLast) {
-    contextInstructions = `This is the LAST module of the lesson. End with a summary/review page that wraps up the key takeaways from the entire lesson.`;
+  if (isQuizModule) {
+    contextInstructions = `This is the FINAL QUIZ MODULE. Generate ONLY question pages — NO teaching content whatsoever.
+Use a mix of all question formats: multiple-choice, true-false, multi-select, fill-blank, and word-arrange.
+Questions must comprehensively test key concepts from the ENTIRE lesson "${lessonTitle}".
+Generate exactly ${modulePlan.pageCount} question pages.
+Every question MUST have format set to one of: "multiple-choice", "true-false", "multi-select", "fill-blank", "word-arrange".
+For multi-select, use correctIndices array. For fill-blank, use correctAnswer string. For word-arrange, options are the shuffled word chips and correctAnswer is the correct space-joined sentence.`;
+  } else if (isFirst) {
+    contextInstructions = `This is the FIRST module of the lesson. Start with a welcoming intro page that introduces the overall lesson topic. The VERY FIRST block on this intro page must be a real Wikimedia Commons image (use src="wikimedia:<relevant search term>") — NOT an emoji. Choose a search term that will find a compelling, on-topic diagram or photograph. Follow it with a heading and a brief engaging paragraph that hooks the learner.`;
   } else {
     contextInstructions = `This is module ${moduleIndex + 1} of ${totalModules}. It builds on previous modules. Start with a brief transition that connects to what was learned before.`;
   }
@@ -738,7 +943,6 @@ export interface BackgroundGenerationParams {
   userId: string;
   jobId: string;
   topic: string;
-  moduleCount?: number;
   sourceContent?: string;
   sourceType?: 'topic' | 'url' | 'pdf';
 }
@@ -749,7 +953,7 @@ export interface BackgroundGenerationParams {
  * Call this with `void` — it is designed to be fire-and-forget.
  */
 export async function startBackgroundGeneration(params: BackgroundGenerationParams): Promise<void> {
-  const { lessonId, userId, jobId, topic, moduleCount = 3, sourceContent } = params;
+  const { lessonId, userId, jobId, topic, sourceContent } = params;
 
   const updateJob = (fields: Partial<typeof lessonGenerationJobs.$inferInsert>) =>
     db.update(lessonGenerationJobs)
@@ -760,9 +964,15 @@ export async function startBackgroundGeneration(params: BackgroundGenerationPara
     // ── Phase 1: Planning ──────────────────────────────
     await updateJob({ status: 'planning' });
 
-    const plan = await generateLessonPlan(topic, moduleCount, sourceContent);
+    const initialPlan = await generateLessonPlan(topic, sourceContent);
 
-    // Update the lesson stub with AI-generated title/description/tags
+    // ── Phase 1b: Reviewing & refining the plan ────────
+    await updateJob({ status: 'reviewing' });
+
+    const plan = await refineLessonPlan(topic, initialPlan);
+
+    // Update the lesson stub with AI-generated title/description/tags + prerequisite concepts
+    // Store prerequisiteConcepts as a special metadata field alongside the tags
     await db.update(lessons)
       .set({
         title: plan.title,
@@ -773,6 +983,16 @@ export async function startBackgroundGeneration(params: BackgroundGenerationPara
       })
       .where(eq(lessons.id, lessonId));
 
+    // Store prerequisiteConcepts in the lesson's JSON metadata (via description extension)
+    // We store it separately — tag the lesson with prerequisite concept tags for discoverability
+    if (plan.prerequisiteConcepts?.length) {
+      // Merge prerequisite concepts into the lesson tags for searchability
+      const allTags = [...new Set([...plan.tags, ...plan.prerequisiteConcepts.map(c => c.toLowerCase().trim())])];
+      await db.update(lessons)
+        .set({ tags: allTags })
+        .where(eq(lessons.id, lessonId));
+    }
+
     // Advance to generating phase
     await updateJob({ status: 'generating', totalModules: plan.modules.length });
 
@@ -782,10 +1002,13 @@ export async function startBackgroundGeneration(params: BackgroundGenerationPara
 
       await updateJob({ currentModuleTitle: modulePlan.title });
 
-      // Create module record
+      // Create module record — append "[Quiz]" marker to quiz module title for detection
+      const moduleTitle = modulePlan.isQuiz && !modulePlan.title.toLowerCase().includes('quiz')
+        ? `${modulePlan.title} [Quiz]`
+        : modulePlan.title;
       const [moduleRecord] = await db.insert(lessonModules).values({
         lessonId,
-        title: modulePlan.title,
+        title: moduleTitle,
         description: modulePlan.description,
         orderIndex: i,
       }).returning();
@@ -834,10 +1057,9 @@ export async function startBackgroundGeneration(params: BackgroundGenerationPara
 
 export async function generateFullLesson(
   topic: string,
-  moduleCount: number = 3
 ): Promise<GeneratedLesson> {
   // Phase 1: Plan the lesson
-  const plan = await generateLessonPlan(topic, moduleCount);
+  const plan = await generateLessonPlan(topic);
 
   // Phase 2: Generate content for each module (in parallel)
   const moduleContents = await Promise.all(

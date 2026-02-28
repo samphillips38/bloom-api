@@ -6,6 +6,7 @@ import {
   lessonContentEdits,
   lessonEditSuggestions,
   lessonRatings,
+  lessonPrerequisites,
   users,
   type Lesson,
   type LessonContent,
@@ -1197,6 +1198,39 @@ export async function getLessonModules(lessonId: string): Promise<LessonModule[]
 /**
  * Bulk-create modules and their content pages for a lesson (used by AI generation).
  */
+// ═══════════════════════════════════════════════════════
+//  Prerequisites
+// ═══════════════════════════════════════════════════════
+
+export async function addPrerequisite(
+  lessonId: string,
+  prerequisiteLessonId: string,
+): Promise<void> {
+  // Prevent self-referencing
+  if (lessonId === prerequisiteLessonId) {
+    throw new Error('A lesson cannot be a prerequisite of itself');
+  }
+  // Upsert — ignore if already exists (UNIQUE constraint)
+  await db
+    .insert(lessonPrerequisites)
+    .values({ lessonId, prerequisiteLessonId })
+    .onConflictDoNothing();
+}
+
+export async function removePrerequisite(
+  lessonId: string,
+  prerequisiteLessonId: string,
+): Promise<void> {
+  await db
+    .delete(lessonPrerequisites)
+    .where(
+      and(
+        eq(lessonPrerequisites.lessonId, lessonId),
+        eq(lessonPrerequisites.prerequisiteLessonId, prerequisiteLessonId),
+      ),
+    );
+}
+
 export async function bulkInsertModulesWithContent(
   lessonId: string,
   authorId: string,

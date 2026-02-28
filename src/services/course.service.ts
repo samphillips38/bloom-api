@@ -6,6 +6,7 @@ import {
   lessons, 
   lessonContent,
   lessonModules,
+  lessonPrerequisites,
   type Category,
   type Course,
   type Level,
@@ -16,6 +17,15 @@ import {
 } from '../db/schema';
 import { eq, asc } from 'drizzle-orm';
 import type { ContentPageMetadata, LessonMetadata } from './workshop.service';
+
+export interface LessonStub {
+  id: string;
+  title: string;
+  description: string | null;
+  themeColor: string | null;
+  iconUrl: string | null;
+  tags: string[];
+}
 
 export interface CourseWithLevels extends Course {
   levels: LevelWithLessons[];
@@ -32,6 +42,8 @@ export interface LessonModuleWithContent extends LessonModule {
 export interface LessonWithContent extends Lesson {
   modules: LessonModuleWithContent[];
   content: LessonContent[];
+  prerequisites: LessonStub[];
+  nextLessons: LessonStub[];
 }
 
 // Categories
@@ -153,7 +165,45 @@ export async function getLessonWithContent(lessonId: string): Promise<LessonWith
     content: content.filter(c => c.moduleId === mod.id),
   }));
 
-  return { ...lesson, modules: modulesWithContent, content };
+  // Fetch prerequisites (lessons this lesson depends on)
+  const prereqLinks = await db
+    .select({ prereqId: lessonPrerequisites.prerequisiteLessonId })
+    .from(lessonPrerequisites)
+    .where(eq(lessonPrerequisites.lessonId, lessonId));
+
+  const prerequisites: LessonStub[] = prereqLinks.length > 0
+    ? (await Promise.all(prereqLinks.map(async ({ prereqId }) => {
+        const [prereqLesson] = await db
+          .select()
+          .from(lessons)
+          .where(eq(lessons.id, prereqId))
+          .limit(1);
+        return prereqLesson
+          ? { id: prereqLesson.id, title: prereqLesson.title, description: prereqLesson.description, themeColor: prereqLesson.themeColor, iconUrl: prereqLesson.iconUrl, tags: (prereqLesson.tags as string[]) || [] }
+          : null;
+      }))).filter((l): l is LessonStub => l !== null)
+    : [];
+
+  // Fetch next lessons (lessons that depend on this lesson)
+  const nextLinks = await db
+    .select({ nextId: lessonPrerequisites.lessonId })
+    .from(lessonPrerequisites)
+    .where(eq(lessonPrerequisites.prerequisiteLessonId, lessonId));
+
+  const nextLessons: LessonStub[] = nextLinks.length > 0
+    ? (await Promise.all(nextLinks.map(async ({ nextId }) => {
+        const [nextLesson] = await db
+          .select()
+          .from(lessons)
+          .where(eq(lessons.id, nextId))
+          .limit(1);
+        return nextLesson
+          ? { id: nextLesson.id, title: nextLesson.title, description: nextLesson.description, themeColor: nextLesson.themeColor, iconUrl: nextLesson.iconUrl, tags: (nextLesson.tags as string[]) || [] }
+          : null;
+      }))).filter((l): l is LessonStub => l !== null)
+    : [];
+
+  return { ...lesson, modules: modulesWithContent, content, prerequisites, nextLessons };
 }
 
 export async function getLessonsByLevel(levelId: string): Promise<Lesson[]> {
