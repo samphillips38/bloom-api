@@ -122,6 +122,18 @@ async function runAutoMigrations() {
       ALTER TABLE lesson_content
         ADD COLUMN IF NOT EXISTS module_id UUID REFERENCES lesson_modules(id) ON DELETE CASCADE
     `);
+
+    // Ensure lesson_modules has sources column (added for AI web-search source tracking)
+    await db.execute(sql`
+      ALTER TABLE lesson_modules
+        ADD COLUMN IF NOT EXISTS sources JSONB DEFAULT '[]'
+    `);
+
+    // Ensure lesson_generation_jobs has discovered_sources column
+    await db.execute(sql`
+      ALTER TABLE lesson_generation_jobs
+        ADD COLUMN IF NOT EXISTS discovered_sources JSONB DEFAULT '[]'
+    `);
     await db.execute(sql`
       CREATE INDEX IF NOT EXISTS idx_lesson_content_module ON lesson_content(module_id)
     `);
