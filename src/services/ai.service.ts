@@ -219,7 +219,7 @@ const LESSON_RESPONSE_SCHEMA = {
 const PLAN_SYSTEM_PROMPT = `You are an expert educational content planner for the Bloom learning platform. Your job is to plan the structure of an engaging, well-organized lesson.
 
 Given a topic, create a lesson plan with:
-1. A compelling title for the lesson
+1. A simple and to the point title for the lesson (e.g. "Newtons Second Law of Motion" or "World War II")
 2. A brief description (1-2 sentences)
 3. Relevant topic tags (2-5 short, lowercase labels)
 4. prerequisiteConcepts: 2-5 brief topic strings that a learner should already know before attempting this lesson (e.g. "basic algebra", "Newton's laws", "Python basics"). These help learners discover whether they are ready and help the platform link related lessons.
@@ -241,9 +241,9 @@ Every lesson MUST end with a dedicated quiz module (isQuiz: true) titled "Final 
 
 Guidelines:
 - Decide the number of teaching modules based on topic complexity:
-  * 2–3 teaching modules + 1 quiz module for focused, narrow topics
-  * 4–5 teaching modules + 1 quiz module for broad topics
-  * Up to 6 teaching modules + 1 quiz module for comprehensive topics
+  * 3–5 teaching modules + 1 quiz module for focused, narrow topics
+  * 5–7 teaching modules + 1 quiz module for broad topics
+  * Up to 8 teaching modules + 1 quiz module for comprehensive topics
 - Each teaching module should have 3-6 pages
 - Modules should build progressively on each other
 - The first module should introduce the topic with a compelling real-world hook
@@ -399,10 +399,9 @@ GUIDELINES:
 - Use interactive components liberally — aim for at least 1-2 per TEACHING module to make lessons engaging
 - Place interactive blocks on their OWN page (or with minimal surrounding text) so they have visual space
 - Use rich text formatting: bold for key terms, colors for emphasis, definition tooltips
-- Include at least 1 multiple-choice question per teaching module
 - For image blocks, use format "wikimedia:<search term>" to source a real diagram from Wikimedia Commons (e.g. "wikimedia:photosynthesis light reaction", "wikimedia:neuron anatomy", "wikimedia:mitosis cell division stages"). Prefer real diagrams over emoji placeholders. Only use "emoji:<emoji>" when the topic is truly abstract and no real diagram would apply.
 - Use LaTeX for math equations
-- Keep paragraphs concise and mobile-friendly
+- Keep paragraphs concise and mobile-friendly. Do not include unnecessary filler content, all text should be concise and to the point
 - Colors: "accent" (orange), "secondary" (gray), "success" (green), "warning" (amber), "blue", "purple"
 - Callout styles: "info", "tip", "warning", "example"
 - For ALL unused/optional fields on standard blocks, always write null (never omit a field)
